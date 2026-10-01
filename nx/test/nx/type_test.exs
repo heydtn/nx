@@ -31,6 +31,41 @@ defmodule Nx.TypeTest do
     test "to_real preserves type" do
       assert Nx.Type.to_real({:f8_e4m3fn, 8}) == {:f8_e4m3fn, 8}
     end
+
+    test "merges to the wider f type in either order" do
+      for type <- [f: 16, f: 32, f: 64] do
+        assert Nx.Type.merge({:f8_e4m3fn, 8}, type) == type
+        assert Nx.Type.merge(type, {:f8_e4m3fn, 8}) == type
+      end
+    end
+
+    test "raises when merged with f8 in either order" do
+      assert_raise ArgumentError, ~r/cannot merge/, fn ->
+        Nx.Type.merge({:f8_e4m3fn, 8}, {:f, 8})
+      end
+
+      assert_raise ArgumentError, ~r/cannot merge/, fn ->
+        Nx.Type.merge({:f, 8}, {:f8_e4m3fn, 8})
+      end
+    end
+
+    test "merges with other kinds by the precedence of f in either order" do
+      for {type, expected} <- [
+            {{:u, 8}, {:f8_e4m3fn, 8}},
+            {{:s, 64}, {:f8_e4m3fn, 8}},
+            {{:bf, 16}, {:f8_e4m3fn, 8}},
+            {{:c, 64}, {:c, 64}},
+            {{:c, 128}, {:c, 128}}
+          ] do
+        assert Nx.Type.merge({:f8_e4m3fn, 8}, type) == expected
+        assert Nx.Type.merge(type, {:f8_e4m3fn, 8}) == expected
+      end
+    end
+
+    test "merges with the same 8-bit float type" do
+      assert Nx.Type.merge({:f8_e4m3fn, 8}, {:f8_e4m3fn, 8}) == {:f8_e4m3fn, 8}
+      assert Nx.Type.merge({:f, 8}, {:f, 8}) == {:f, 8}
+    end
   end
 
   describe "fp8 E4M3FN special values (per OFP8 spec)" do

@@ -65,6 +65,12 @@ defmodule Nx.Type do
           | :c64
           | :c128
 
+  quantizations = [
+    f: [
+      {:f8_e4m3fn, 8}
+    ]
+  ]
+
   @doc """
   Returns the minimum possible finite value for the given type.
   """
@@ -224,9 +230,11 @@ defmodule Nx.Type do
     defp validate(unquote(:"#{kind}#{size}")), do: unquote(type)
   end
 
-  # FP8 E4M3FN type support
-  defp validate({:f8_e4m3fn, 8}), do: {:f8_e4m3fn, 8}
-  defp validate(:f8_e4m3fn), do: {:f8_e4m3fn, 8}
+  for {_general_type, types} <- quantizations,
+      {name, _size} = quantization <- types do
+    defp validate(unquote(quantization)), do: unquote(quantization)
+    defp validate(unquote(name)), do: unquote(quantization)
+  end
 
   defp validate(_type), do: :error
 
@@ -252,8 +260,13 @@ defmodule Nx.Type do
   """
   def to_floating({:bf, size}), do: {:bf, size}
   def to_floating({:f, size}), do: {:f, size}
-  def to_floating({:f8_e4m3fn, size}), do: {:f8_e4m3fn, size}
   def to_floating({:c, size}), do: {:c, size}
+
+  for {_general_type, types} <- quantizations,
+      quantization <- types do
+    def to_floating(unquote(quantization)), do: unquote(quantization)
+  end
+
   def to_floating(type), do: merge(type, {:f, 32})
 
   @doc """
@@ -302,9 +315,14 @@ defmodule Nx.Type do
       {:f, 64}
   """
   def to_real({:f, size}), do: {:f, size}
-  def to_real({:f8_e4m3fn, size}), do: {:f8_e4m3fn, size}
   def to_real({:c, s}), do: {:f, div(s, 2)}
   def to_real({:bf, size}), do: {:bf, size}
+
+  for {_general_type, types} <- quantizations,
+      quantization <- types do
+    def to_real(unquote(quantization)), do: unquote(quantization)
+  end
+
   def to_real(_type), do: {:f, 32}
 
   @doc """
@@ -387,6 +405,14 @@ defmodule Nx.Type do
   as long as the size of the `max(big, small * 2))` fits under 64
   bits. Otherwise it casts to f64.
 
+  Alternative float formats, such as `{:f8_e4m3fn, 8}`, are merged as
+  their generalized format (`{:f, 8}` in this case). If the generalized
+  format wins, the result keeps the alternative format. Two different
+  types with the same generalized format, such as `{:f8_e4m3fn, 8}` and
+  `{:f, 8}`, do not merge, since neither holds all of the other's
+  values. Merging them raises, so convert one of them with
+  `Nx.as_type/2` first.
+
   In the case of complex numbers, the maximum bit size is 128 bits
   because they are composed of two floats. Float types are promoted
   to c64 by default, with the exception of f64, which is promoted to
@@ -446,6 +472,13 @@ defmodule Nx.Type do
       iex> Nx.Type.merge({:f, 64}, {:bf, 16})
       {:f, 64}
 
+      iex> Nx.Type.merge({:f8_e4m3fn, 8}, {:f, 32})
+      {:f, 32}
+      iex> Nx.Type.merge({:f8_e4m3fn, 8}, {:s, 32})
+      {:f8_e4m3fn, 8}
+      iex> Nx.Type.merge({:f8_e4m3fn, 8}, {:f, 8})
+      ** (ArgumentError) cannot merge {:f8_e4m3fn, 8} and {:f, 8}, convert one of them with Nx.as_type/2 first
+
       iex> Nx.Type.merge({:f, 16}, {:c, 64})
       {:c, 64}
       iex> Nx.Type.merge({:f, 32}, {:c, 64})
@@ -464,7 +497,28 @@ defmodule Nx.Type do
     {type, max(left_size, right_size)}
   end
 
-  def merge(left, right) do
+  def merge({left_type, size} = left, {right_type, size} = right) when left_type != right_type do
+    left_general = generalize(left)
+    right_general = generalize(right)
+
+    if left_general == right_general do
+      raise(
+        ArgumentError,
+        "cannot merge #{inspect(left)} and #{inspect(right)}, " <>
+          "convert one of them with Nx.as_type/2 first"
+      )
+    end
+
+    case merge_by_precedence(left_general, right_general) do
+      ^left_general -> left
+      ^right_general -> right
+      merged -> merged
+    end
+  end
+
+  def merge(left, right), do: merge_by_precedence(left, right)
+
+  defp merge_by_precedence(left, right) do
     case sort(left, right) do
       {{:u, size1}, {:s, size2}} -> {:s, max(min(size1 * 2, 64), size2)}
       {{:f, size1}, {:c, size2}} -> {:c, max(size1 * 2, size2)}
@@ -472,15 +526,35 @@ defmodule Nx.Type do
     end
   end
 
-  defp type_to_int(:c), do: 4
-  defp type_to_int(:f), do: 3
-  defp type_to_int(:f8_e4m3fn), do: 3
-  defp type_to_int(:bf), do: 2
-  defp type_to_int(:s), do: 1
-  defp type_to_int(:u), do: 0
+  for {general_type, types} <- quantizations,
+      {_name, size} = quantization <- types do
+    defp generalize(unquote(quantization)), do: {unquote(general_type), unquote(size)}
+  end
 
-  defp sort({left_type, _} = left, {right_type, _} = right) do
-    if type_to_int(left_type) < type_to_int(right_type) do
+  defp generalize(type), do: type
+
+  # From highest to lowest precedence for sorting.
+  type_precedence = [
+    :c,
+    :f,
+    :bf,
+    :s,
+    :u
+  ]
+
+  for {type, precedence} <- type_precedence |> Enum.reverse() |> Enum.with_index() do
+    defp type_to_int(unquote(type)), do: unquote(precedence)
+
+    # Quantizations have the same precedence as their generalized type
+    for {quantization_type, _size} <- Keyword.get(quantizations, type, []) do
+      defp type_to_int(unquote(quantization_type)), do: unquote(precedence)
+    end
+  end
+
+  # A quantization and its generalized type have the same precedence,
+  # so the larger size wins between them
+  defp sort({left_type, left_size} = left, {right_type, right_size} = right) do
+    if {type_to_int(left_type), left_size} < {type_to_int(right_type), right_size} do
       {left, right}
     else
       {right, left}
@@ -588,9 +662,13 @@ defmodule Nx.Type do
       false
   """
   def float?({:f, _}), do: true
-  def float?({:f8_e4m3fn, _}), do: true
   def float?({:bf, _}), do: true
   def float?({:c, _}), do: true
+
+  for {_general_type, types} <- quantizations, quantization <- types do
+    def float?(unquote(quantization)), do: true
+  end
+
   def float?({_, _}), do: false
 
   @doc """
@@ -660,7 +738,10 @@ defmodule Nx.Type do
       iex> Nx.Type.to_string({:f, 64})
       "f64"
   """
-  def to_string({:f8_e4m3fn, 8}), do: "f8_e4m3fn"
+  for {_general_type, types} <- quantizations, {name, _size} = quantization <- types do
+    def to_string(unquote(quantization)), do: unquote(Atom.to_string(name))
+  end
+
   def to_string({type, size}), do: Atom.to_string(type) <> Integer.to_string(size)
 
   @doc """
