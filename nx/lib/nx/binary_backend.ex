@@ -324,6 +324,7 @@ defmodule Nx.BinaryBackend do
   # as we transpose and build the rest.
   @impl true
   def pad(out, t, pad_value, padding_config) do
+    t = as_type(%{t | type: out.type}, t)
     pad_value = %{pad_value | type: out.type} |> as_type(pad_value) |> to_binary()
 
     case t.shape do
