@@ -627,6 +627,12 @@ defmodule Nx.Type do
     {:f, size}
   end
 
+  for {_general_type, types} <- quantizations, quantization <- types do
+    def merge_number(unquote(quantization), number) when is_number(number) do
+      unquote(quantization)
+    end
+  end
+
   def merge_number({:c, size}, _number), do: {:c, size}
 
   def merge_number(_, number) when is_number(number) do

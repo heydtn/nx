@@ -66,6 +66,12 @@ defmodule Nx.TypeTest do
       assert Nx.Type.merge({:f8_e4m3fn, 8}, {:f8_e4m3fn, 8}) == {:f8_e4m3fn, 8}
       assert Nx.Type.merge({:f, 8}, {:f, 8}) == {:f, 8}
     end
+
+    test "merge_number keeps the type" do
+      assert Nx.Type.merge_number({:f8_e4m3fn, 8}, 1) == {:f8_e4m3fn, 8}
+      assert Nx.Type.merge_number({:f8_e4m3fn, 8}, -1) == {:f8_e4m3fn, 8}
+      assert Nx.Type.merge_number({:f8_e4m3fn, 8}, 1.0) == {:f8_e4m3fn, 8}
+    end
   end
 
   describe "fp8 E4M3FN special values (per OFP8 spec)" do
