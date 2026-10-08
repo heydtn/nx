@@ -7,6 +7,7 @@
   * [Nx] Read Elixir number literals at the precision of element-wise binary operations
   * [Nx.Defn] Return finite gradients for `Nx.sigmoid/1` at very negative and non-finite inputs
   * [Nx.LinAlg] Let `eigh/2` reach `f64` precision for `f64` inputs, instead of stopping once the off-diagonal entries are within `1.0e-5` of the diagonal
+  * [Nx.LinAlg] Compute `svd/2` to `f64` precision for `f64` inputs, so `pinv/2` and `least_squares/3` are accurate and small singular values are no longer reported as zero
 
 ## v1.0.0 (2026-09-10)
 

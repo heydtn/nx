@@ -21,6 +21,9 @@ defmodule Nx.LinAlg.SVD do
   import Nx.Defn
   @eps 1.1920929e-07
 
+  <<f64_epsilon::float-64-little>> = Nx.Type.epsilon_binary({:f, 64})
+  @f64_epsilon f64_epsilon
+
   defn svd(input_tensor, opts) do
     {target_shape, u_shape, s_shape, vt_shape} = calculate_shapes(input_tensor)
 
@@ -131,7 +134,7 @@ defmodule Nx.LinAlg.SVD do
           Nx.dot(tensor, [-2], tensor, [-2])
       end
 
-    {s_sq, v} = Nx.LinAlg.eigh(gram, max_iter: opts[:max_iter])
+    {s_sq, v} = Nx.LinAlg.eigh(gram, max_iter: opts[:max_iter], eps: eigh_eps(gram))
 
     # clamp small floating-point negatives before sqrt
     s = Nx.sqrt(Nx.max(s_sq, 0))
@@ -177,7 +180,7 @@ defmodule Nx.LinAlg.SVD do
     {u, h} = qdwh(a, opts)
     # ensure H is hermitian
     h = (h + Nx.LinAlg.adjoint(h)) / 2
-    {s, v} = Nx.LinAlg.eigh(h, max_iter: opts[:max_iter])
+    {s, v} = Nx.LinAlg.eigh(h, max_iter: opts[:max_iter], eps: eigh_eps(h))
 
     sign = Nx.select(s < 0, -1, 1)
 
@@ -248,6 +251,16 @@ defmodule Nx.LinAlg.SVD do
     h = u |> Nx.LinAlg.adjoint() |> Nx.dot(x)
     h = (h + Nx.LinAlg.adjoint(h)) / 2
     {u, h}
+  end
+
+  # eigh uses `eps` to decide when to stop and to round eigenvalues and eigenvector
+  # entries at or below it to zero. Its default of 1.0e-4 leaves f64 results far
+  # less precise than the type allows, so f64 uses its own precision instead.
+  defnp eigh_eps(tensor) do
+    case Nx.Type.to_real(Nx.type(tensor)) do
+      {:f, 64} -> @f64_epsilon
+      _ -> 1.0e-4
+    end
   end
 
   # f16 is not enough precision to compute SVD

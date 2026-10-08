@@ -810,6 +810,25 @@ defmodule Nx.LinAlgTest do
   end
 
   describe "svd" do
+    test "returns an orthonormal u for tall f64 matrices when full_matrices? is false" do
+      t = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f64)
+      {u, s, vt} = Nx.LinAlg.svd(t, full_matrices?: false)
+
+      assert_all_close(Nx.dot(Nx.transpose(u), u), Nx.eye(3, type: :f64), atol: 1.0e-10)
+      assert_all_close(u |> Nx.multiply(s) |> Nx.dot(vt), t, atol: 1.0e-10)
+    end
+
+    test "keeps the small singular values of f64 matrices when full_matrices? is false" do
+      t = Nx.tensor([[4, 0, 0], [0, 1, 0], [0, 0, 0.005], [0, 0, 0]], type: :f64)
+      {_u, s, _vt} = Nx.LinAlg.svd(t, full_matrices?: false)
+      assert_all_close(s, Nx.tensor([4, 1, 0.005], type: :f64), atol: 1.0e-12, rtol: 0)
+
+      t = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f64)
+      {_u, s, _vt} = Nx.LinAlg.svd(t, full_matrices?: false)
+      {_u, small_s, _vt} = Nx.LinAlg.svd(Nx.multiply(t, 1.0e-3), full_matrices?: false)
+      assert_all_close(small_s, Nx.multiply(s, 1.0e-3), atol: 1.0e-14, rtol: 0)
+    end
+
     test "finds the singular values of tall matrices" do
       t = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])
 
@@ -1075,6 +1094,18 @@ defmodule Nx.LinAlgTest do
   end
 
   describe "pinv" do
+    test "satisfies the Moore-Penrose conditions for a rank-deficient f64 matrix" do
+      a = Nx.tensor([[2, 1, 3], [4, 2, 6], [1, 3, 4], [3, 1, 4]], type: :f64)
+      p = Nx.LinAlg.pinv(a)
+      ap = Nx.dot(a, p)
+      pa = Nx.dot(p, a)
+
+      assert_all_close(Nx.dot(ap, a), a, atol: 1.0e-12, rtol: 0)
+      assert_all_close(Nx.dot(pa, p), p, atol: 1.0e-12, rtol: 0)
+      assert_all_close(ap, Nx.transpose(ap), atol: 1.0e-12, rtol: 0)
+      assert_all_close(pa, Nx.transpose(pa), atol: 1.0e-12, rtol: 0)
+    end
+
     test "does not raise for 0 singular values" do
       key = Nx.Random.key(System.unique_integer())
 
@@ -1192,6 +1223,14 @@ defmodule Nx.LinAlgTest do
   end
 
   describe "least_squares" do
+    test "returns the exact least-squares solution for a tall f64 matrix" do
+      a = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f64)
+      b = Nx.tensor([1, 2, 3, 4], type: :f64)
+      expected = Nx.tensor([181 / 22, -80 / 11, -7 / 2], type: :f64)
+
+      assert_all_close(Nx.LinAlg.least_squares(a, b), expected, atol: 1.0e-9)
+    end
+
     test "properties for linear equations" do
       key = Nx.Random.key(System.unique_integer())
 
