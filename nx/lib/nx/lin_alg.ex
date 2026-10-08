@@ -1179,6 +1179,8 @@ defmodule Nx.LinAlg do
 
   ## Options
     * `:eps` - Rounding error threshold used to assume values as 0. Defaults to `1.0e-10`
+    * `:type` - The real floating point type to compute in and return.
+      Defaults to the floating point type of the input
 
   ## Examples
 
@@ -1231,7 +1233,8 @@ defmodule Nx.LinAlg do
       >
   """
   defn pinv(tensor, opts \\ []) do
-    opts = keyword!(opts, eps: 1.0e-10)
+    opts = keyword!(opts, [:type, eps: 1.0e-10])
+    tensor = cast_to_type(tensor, opts[:type])
 
     if Nx.all(Nx.abs(tensor) <= opts[:eps]) do
       pinv_zero(tensor)
@@ -1434,6 +1437,9 @@ defmodule Nx.LinAlg do
       If `true`, `u` and `vt` are of shape (M, M), (N, N). Otherwise,
       the shapes are (M, K) and (K, N), where K = min(M, N).
 
+    * `:type` - The real floating point type to compute in and return.
+      Defaults to the floating point type of the input
+
   Note not all options apply to all backends, as backends may have
   specific optimizations that render these mechanisms unnecessary.
 
@@ -1517,7 +1523,7 @@ defmodule Nx.LinAlg do
       >
   """
   def svd(tensor, opts \\ []) do
-    opts = keyword!(opts, max_iter: 100, full_matrices?: true)
+    opts = keyword!(opts, [:type, max_iter: 100, full_matrices?: true])
     _ = opts[:max_iter] || raise ArgumentError, "missing option :max_iter"
 
     %T{vectorized_axes: vectorized_axes} = tensor = Nx.to_tensor(tensor)
@@ -1525,6 +1531,8 @@ defmodule Nx.LinAlg do
     %T{type: type, shape: shape} = tensor = Nx.devectorize(tensor)
 
     Nx.Shared.raise_complex_not_implemented_yet(type, "LinAlg.svd", 2)
+    %T{type: type} = tensor = cast_to_type(tensor, opts[:type])
+    opts = Keyword.delete(opts, :type)
     output_type = Nx.Type.to_floating(type)
     {u_shape, s_shape, v_shape} = Nx.Shape.svd(shape, opts)
     rank = tuple_size(shape)
@@ -2124,6 +2132,8 @@ defmodule Nx.LinAlg do
   ## Options
 
     * `:eps` - Rounding error threshold used to assume values as 0. Defaults to `1.0e-7`
+    * `:type` - The real floating point type to compute the singular values in.
+      Defaults to the floating point type of the input
 
   ## Examples
 
@@ -2156,7 +2166,7 @@ defmodule Nx.LinAlg do
   @doc from_backend: false
   defn matrix_rank(a, opts \\ []) do
     # TODO: support batching when SVD supports it too
-    opts = keyword!(opts, eps: 1.0e-7)
+    opts = keyword!(opts, [:type, eps: 1.0e-7])
     %T{type: type, shape: shape} = Nx.to_tensor(a)
     size = Nx.rank(shape)
 
@@ -2180,7 +2190,7 @@ defmodule Nx.LinAlg do
     max_dim = if row_dim > col_dim, do: row_dim, else: col_dim
 
     # Calculate max singular value
-    {_u, s, _v} = Nx.LinAlg.svd(a, full_matrices?: false)
+    {_u, s, _v} = Nx.LinAlg.svd(a, full_matrices?: false, type: opts[:type])
 
     s_max = Nx.reduce_max(s)
 
@@ -2197,6 +2207,8 @@ defmodule Nx.LinAlg do
   ## Options
 
     * `:eps` - Rounding error threshold used to assume values as 0. Defaults to `1.0e-15`
+    * `:type` - The real floating point type to compute in and return.
+      Defaults to the floating point type of the inputs
 
   ## Examples
 
@@ -2234,7 +2246,7 @@ defmodule Nx.LinAlg do
   """
   @doc from_backend: false
   defn least_squares(a, b, opts \\ []) do
-    opts = keyword!(opts, eps: 1.0e-15)
+    opts = keyword!(opts, [:type, eps: 1.0e-15])
 
     %T{type: a_type, shape: a_shape} = Nx.to_tensor(a)
     a_size = Nx.rank(a_shape)
@@ -2284,8 +2296,26 @@ defmodule Nx.LinAlg do
     end
 
     a
-    |> Nx.LinAlg.pinv(eps: opts[:eps])
-    |> Nx.dot(b)
+    |> Nx.LinAlg.pinv(eps: opts[:eps], type: opts[:type])
+    |> Nx.dot(cast_to_type(b, opts[:type]))
+  end
+
+  # Casts to the :type option of the decompositions, if given
+  deftransformp cast_to_type(tensor, nil), do: tensor
+
+  deftransformp cast_to_type(tensor, type) do
+    type = Nx.Type.normalize!(type)
+
+    if Nx.Type.complex?(Nx.type(tensor)) do
+      raise ArgumentError, "the :type option is not supported for complex inputs"
+    end
+
+    unless Nx.Type.float?(type) and not Nx.Type.complex?(type) do
+      raise ArgumentError,
+            "expected :type to be a real floating point type, got: #{inspect(type)}"
+    end
+
+    Nx.as_type(tensor, type)
   end
 
   defp apply_vectorized(tensor, fun) when is_function(fun, 1) do

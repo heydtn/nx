@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Enhancements
+
+  * [Nx.LinAlg] Add a `:type` option to `svd/2`, `pinv/2`, `least_squares/3` and `matrix_rank/2` to compute in a given floating point type, such as `:f64` for more precision
+
 ### Bug fixes
 
   * [Nx] Read Elixir number literals at the precision of element-wise binary operations

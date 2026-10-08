@@ -810,6 +810,28 @@ defmodule Nx.LinAlgTest do
   end
 
   describe "svd" do
+    test "computes in and returns the :type option" do
+      t = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f32)
+
+      for full_matrices? <- [false, true] do
+        {u, s, vt} = Nx.LinAlg.svd(t, type: :f64, full_matrices?: full_matrices?)
+        assert {u.type, s.type, vt.type} == {{:f, 64}, {:f, 64}, {:f, 64}}
+
+        assert_all_close(Nx.dot(Nx.transpose(u), u), Nx.eye(Nx.axis_size(u, 1), type: :f64),
+          atol: 1.0e-10
+        )
+      end
+
+      {u, s, vt} = Nx.LinAlg.svd(Nx.as_type(t, :f64), type: :f32)
+      assert {u.type, s.type, vt.type} == {{:f, 32}, {:f, 32}, {:f, 32}}
+    end
+
+    test "raises for a :type that is not a real floating point type" do
+      assert_raise ArgumentError,
+                   "expected :type to be a real floating point type, got: {:s, 32}",
+                   fn -> Nx.LinAlg.svd(Nx.iota({3, 2}), type: :s32) end
+    end
+
     test "returns an orthonormal u for tall f64 matrices when full_matrices? is false" do
       t = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f64)
       {u, s, vt} = Nx.LinAlg.svd(t, full_matrices?: false)
@@ -1094,6 +1116,15 @@ defmodule Nx.LinAlgTest do
   end
 
   describe "pinv" do
+    test "computes in and returns the :type option" do
+      a = Nx.tensor([[2, 1, 3], [4, 2, 6], [1, 3, 4], [3, 1, 4]], type: :f32)
+      p = Nx.LinAlg.pinv(a, type: :f64)
+      a = Nx.as_type(a, :f64)
+
+      assert p.type == {:f, 64}
+      assert_all_close(a |> Nx.dot(p) |> Nx.dot(a), a, atol: 1.0e-12, rtol: 0)
+    end
+
     test "satisfies the Moore-Penrose conditions for a rank-deficient f64 matrix" do
       a = Nx.tensor([[2, 1, 3], [4, 2, 6], [1, 3, 4], [3, 1, 4]], type: :f64)
       p = Nx.LinAlg.pinv(a)
@@ -1222,7 +1253,25 @@ defmodule Nx.LinAlgTest do
     end
   end
 
+  describe "matrix_rank" do
+    test "computes the singular values in the :type option" do
+      t = Nx.tensor([[4, 0, 0], [0, 1, 0], [0, 0, 0.0005], [0, 0, 0]], type: :f32)
+
+      assert Nx.LinAlg.matrix_rank(t) == Nx.tensor(2, type: :u32)
+      assert Nx.LinAlg.matrix_rank(t, type: :f64) == Nx.tensor(3, type: :u32)
+    end
+  end
+
   describe "least_squares" do
+    test "computes in and returns the :type option" do
+      a = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f32)
+      b = Nx.tensor([1, 2, 3, 4], type: :f32)
+      x = Nx.LinAlg.least_squares(a, b, type: :f64)
+
+      assert x.type == {:f, 64}
+      assert_all_close(x, Nx.tensor([181 / 22, -80 / 11, -7 / 2], type: :f64), atol: 1.0e-9)
+    end
+
     test "returns the exact least-squares solution for a tall f64 matrix" do
       a = Nx.tensor([[5, 4, 3], [9, 8, 4], [3, 2, 2], [7, 5, 5]], type: :f64)
       b = Nx.tensor([1, 2, 3, 4], type: :f64)
