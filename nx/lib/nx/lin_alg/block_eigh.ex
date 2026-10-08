@@ -9,6 +9,9 @@ defmodule Nx.LinAlg.BlockEigh do
 
   import Nx.Defn
 
+  <<f64_epsilon::float-64-little>> = Nx.Type.epsilon_binary({:f, 64})
+  @f64_epsilon f64_epsilon
+
   defn eigh(matrix, opts) do
     result =
       matrix
@@ -181,7 +184,15 @@ defmodule Nx.LinAlg.BlockEigh do
 
     t = 1 / (tau + Nx.select(tau >= 0, t, -t))
 
-    pred = Nx.abs(tr) <= 1.0e-5 * Nx.min(Nx.abs(br), Nx.abs(tl))
+    # Skip the rotation once the off-diagonal entry is negligible next to the diagonal.
+    # f64 rotates down to its own precision, other types stop at 1.0e-5.
+    tol =
+      case Nx.type(tl) do
+        {:f, 64} -> @f64_epsilon
+        _ -> 1.0e-5
+      end
+
+    pred = Nx.abs(tr) <= tol * Nx.min(Nx.abs(br), Nx.abs(tl))
     t = Nx.select(pred, Nx.tensor(0, type: tl.type), t)
 
     c = 1.0 / Nx.sqrt(1.0 + t ** 2)

@@ -628,6 +628,16 @@ defmodule Nx.LinAlgTest do
       assert_all_close(pinv, Nx.tensor([[[0.5]], [[0.25]]], type: :f64))
     end
 
+    test "computes eigenvectors to the precision of f64" do
+      t = Nx.tensor([[6, 2, 1, 0], [2, 5, 2, 1], [1, 2, 4, 2], [0, 1, 2, 3]], type: :f64)
+      {eigenvals, eigenvecs} = Nx.LinAlg.eigh(t, eps: 1.0e-15)
+
+      assert_all_close(Nx.dot(t, eigenvecs), Nx.multiply(eigenvecs, eigenvals),
+        atol: 1.0e-12,
+        rtol: 0
+      )
+    end
+
     test "computes eigenvalues and eigenvectors" do
       t =
         Nx.tensor([
