@@ -89,6 +89,17 @@ defmodule Nx.LinAlgTest do
              ) ==
                Nx.LinAlg.triangular_solve(upper, b, left_side: false, lower: false)
     end
+
+    test "returns infinities and NaNs for singular matrices" do
+      a = Nx.tensor([[1.0, 0.0], [1.0, 0.0]])
+
+      assert_equal(
+        Nx.LinAlg.triangular_solve(a, Nx.tensor([1.0, 2.0])),
+        Nx.tensor([1.0, :infinity])
+      )
+
+      assert_equal(Nx.LinAlg.triangular_solve(a, Nx.tensor([1.0, 1.0])), Nx.tensor([1.0, :nan]))
+    end
   end
 
   describe "solve/2" do
@@ -118,6 +129,18 @@ defmodule Nx.LinAlgTest do
       result = ~VEC[i 2 -3i]
 
       assert_all_close(Nx.LinAlg.solve(a, b), result)
+    end
+
+    test "raises when LU finds a zero pivot" do
+      a = Nx.tensor([[[2, 0], [0, 4]], [[1, 2], [2, 4]]])
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a[1], Nx.tensor([1, 1]))
+      end
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a, Nx.tensor([[1, 1], [1, 1]]))
+      end
     end
   end
 

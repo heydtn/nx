@@ -33,6 +33,18 @@ defmodule Nx.BinaryBackend do
   end
 
   @impl true
+  def block(%Nx.Block.LinAlg.Solve{} = struct, _output, [a, _b] = args, fun) do
+    # Raise when LU finds an exact zero pivot, as LAPACK-based solvers do.
+    # triangular_solve/3 itself returns infinities and NaNs for singular input.
+    {_p, _l, u} = Nx.LinAlg.lu(a)
+
+    if u |> Nx.take_diagonal() |> Nx.equal(0) |> Nx.any() |> Nx.to_number() == 1 do
+      raise ArgumentError, "can't solve for singular matrix"
+    end
+
+    apply(fun, [struct | args])
+  end
+
   def block(struct, _output, args, fun) do
     apply(fun, [struct | args])
   end
