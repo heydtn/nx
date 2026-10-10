@@ -178,6 +178,34 @@ defmodule Nx.LinAlgTest do
       invq = Nx.LinAlg.invert(q)
       assert_all_close(Nx.dot(invq, q), Nx.eye(q.shape), atol: 1.0e-15)
     end
+
+    test "keeps the input type" do
+      for type <- [bf: 16, f: 16, f: 32, f: 64] do
+        result = Nx.LinAlg.invert(Nx.tensor([[2, 0], [0, 4]], type: type))
+        assert result.type == type
+        assert_equal(result, Nx.tensor([[0.5, 0], [0, 0.25]], type: type))
+      end
+    end
+
+    test "returns NaN in the input type for singular matrices" do
+      for type <- [bf: 16, f: 16, f: 32, f: 64] do
+        result = Nx.LinAlg.invert(Nx.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]], type: type))
+        assert result.type == type
+        assert_equal(result, Nx.broadcast(:nan, {3, 3}))
+      end
+    end
+
+    test "inverts well-conditioned matrices with small entries" do
+      a = Nx.tensor([[0.2, 0], [0, 0.2]], type: :f16)
+      assert_equal(Nx.LinAlg.invert(a), Nx.tensor([[5, 0], [0, 5]], type: :f16))
+
+      identity = Nx.eye(10)
+
+      assert_all_close(
+        Nx.LinAlg.invert(Nx.multiply(identity, 1.0e-4)),
+        Nx.multiply(identity, 1.0e4)
+      )
+    end
   end
 
   describe "determinant/1" do

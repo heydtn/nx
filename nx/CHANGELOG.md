@@ -10,6 +10,8 @@
   * [Nx] Keep the `:f8_e4m3fn` type in element-wise binary operations with a number, instead of returning `:f32`
   * [Nx] Support `:f8_e4m3fn` in `Nx.Type.cast_number!/2`
   * [Nx.BinaryBackend] Pad in the merged type of the tensor and the pad value in `Nx.pad/3`
+  * [Nx.LinAlg] Keep the input type in `Nx.LinAlg.invert/1` for f16 and bf16 matrices, instead of returning f32
+  * [Nx.LinAlg] Return the inverse instead of NaN from `Nx.LinAlg.invert/1` for invertible matrices with small entries
 
 ## v1.0.0 (2026-09-10)
 

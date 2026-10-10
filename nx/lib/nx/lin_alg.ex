@@ -904,30 +904,30 @@ defmodule Nx.LinAlg do
           Nx.revectorize(tensor, [collapsed_batch: :auto], target_shape: {m, n})
       end
 
-    det = Nx.LinAlg.determinant(tensor)
-
     type = Nx.Type.to_real(Nx.type(tensor))
+
+    # Scale each row by a power of two near its largest absolute value, so
+    # the singularity check below doesn't depend on the magnitude of the
+    # entries. Powers of two scale exactly, so a zero determinant stays zero.
+    row_max = Nx.reduce_max(Nx.abs(tensor), axes: [1], keep_axes: true)
+    scaling_matrix = Nx.as_type(2 ** -Nx.floor(Nx.log2(row_max)), type)
+    # don't rescale for 0-norm rows
+    scaling_matrix = Nx.select(row_max == 0, 1, scaling_matrix)
+    normalized_tensor = scaling_matrix * tensor
+
+    det = Nx.LinAlg.determinant(normalized_tensor)
     eps = Nx.Constants.smallest_positive_normal(type) * 1.0e3
 
     inverse =
       if Nx.abs(det) <= eps do
-        Nx.tensor(:nan)
+        Nx.Constants.nan(type)
       else
-        # matrix is possibly invertible but ill-conditioned
-        # we normalize it by the determinant
-
-        scaling_matrix = Nx.reduce_max(Nx.abs(tensor), axes: [1], keep_axes: true)
-        # don't rescale for 0-norm rows
-        scaling_matrix = 1 / Nx.select(scaling_matrix == 0, 1, scaling_matrix)
-
         # We can think of the implementation as a system of equations.
         # Since we're scaling the left side by scaling_matrix[i] for each row i,
         # we need to also scale the right side.
         # This is achieved by scaling each row of an identity matrix, which is,
         # in fact, the same as putting the scaling values in the diagonal of the
         # right-side matrix.
-
-        normalized_tensor = scaling_matrix * tensor
 
         Nx.LinAlg.solve(
           normalized_tensor,
@@ -1836,8 +1836,8 @@ defmodule Nx.LinAlg do
             [2.75, -0.75]
           ],
           [
-            [-110.37471, 76.87479],
-            [92.24976, -64.24983]
+            [-110.37532, 76.87522],
+            [92.25027, -64.25018]
           ]
         ]
       >
