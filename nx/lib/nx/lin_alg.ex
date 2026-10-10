@@ -929,9 +929,15 @@ defmodule Nx.LinAlg do
 
     det = Nx.LinAlg.determinant(normalized_tensor)
     eps = Nx.Constants.smallest_positive_normal(type) * 1.0e3
+    singular = Nx.abs(det) <= eps
+
+    # With batched input `singular` is vectorized, so both branches below run
+    # on every matrix. Solving a singular matrix raises on some backends, so
+    # the else branch solves against the identity in its place.
+    safe_tensor = Nx.select(singular, Nx.eye(n), normalized_tensor)
 
     inverse =
-      if Nx.abs(det) <= eps do
+      if singular do
         Nx.Constants.nan(type)
       else
         # We can think of the implementation as a system of equations.
@@ -942,7 +948,7 @@ defmodule Nx.LinAlg do
         # right-side matrix.
 
         Nx.LinAlg.solve(
-          normalized_tensor,
+          safe_tensor,
           Nx.make_diagonal(Nx.squeeze(scaling_matrix, axes: [1]))
         )
       end

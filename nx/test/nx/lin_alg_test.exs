@@ -218,6 +218,14 @@ defmodule Nx.LinAlgTest do
       end
     end
 
+    test "returns NaN for singular matrices in a batch" do
+      a = Nx.tensor([[[2, 0], [0, 4]], [[1, 2], [2, 4]]])
+      expected = Nx.tensor([[[0.5, 0], [0, 0.25]], [[:nan, :nan], [:nan, :nan]]])
+
+      assert_equal(Nx.LinAlg.invert(a), expected)
+      assert_equal(Nx.LinAlg.invert(Nx.vectorize(a, :x)), Nx.vectorize(expected, :x))
+    end
+
     test "inverts well-conditioned matrices with small entries" do
       a = Nx.tensor([[0.2, 0], [0, 0.2]], type: :f16)
       assert_equal(Nx.LinAlg.invert(a), Nx.tensor([[5, 0], [0, 5]], type: :f16))

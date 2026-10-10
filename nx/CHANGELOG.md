@@ -13,6 +13,7 @@
   * [Nx.LinAlg] Keep the input type in `Nx.LinAlg.invert/1` for f16 and bf16 matrices, instead of returning f32
   * [Nx.LinAlg] Return the inverse instead of NaN from `Nx.LinAlg.invert/1` for invertible matrices with small entries
   * [Nx.BinaryBackend] Return infinities and NaNs from `Nx.LinAlg.triangular_solve/3` for singular matrices instead of raising. `Nx.LinAlg.solve/2` still raises when the LU factorization finds a zero pivot
+  * [Nx.LinAlg] Return NaN from `Nx.LinAlg.invert/1` for a singular matrix in a batch, instead of raising on backends whose solve raises for singular matrices
 
 ## v1.0.0 (2026-09-10)
 
