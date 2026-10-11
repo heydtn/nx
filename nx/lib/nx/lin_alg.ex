@@ -904,22 +904,29 @@ defmodule Nx.LinAlg do
           Nx.revectorize(tensor, [collapsed_batch: :auto], target_shape: {m, n})
       end
 
-    det = Nx.LinAlg.determinant(tensor)
-
     type = Nx.Type.to_real(Nx.type(tensor))
+
+    # Scale each row by the power of two nearest its largest absolute value,
+    # so the singularity check below doesn't depend on the magnitude of the
+    # entries. Powers of two scale exactly, so a zero determinant stays zero.
+    # Rounding rather than flooring the exponent keeps the scaled rows near 1
+    # when log2 is computed in a narrow type and lands just below an integer.
+    row_max = Nx.reduce_max(Nx.abs(tensor), axes: [1], keep_axes: true)
+    scaling_matrix = 2 ** -Nx.round(Nx.log2(row_max))
+    # don't rescale for 0-norm rows
+    scaling_matrix = Nx.select(row_max == 0, 1, scaling_matrix)
+    normalized_tensor = scaling_matrix * tensor
+
+    det = Nx.LinAlg.determinant(normalized_tensor)
     eps = Nx.Constants.smallest_positive_normal(type) * 1.0e3
+    singular = Nx.abs(det) <= eps
+
+    safe_tensor = solvable_tensor(normalized_tensor, singular, n)
 
     inverse =
-      if Nx.abs(det) <= eps do
-        Nx.tensor(:nan)
+      if singular do
+        Nx.Constants.nan(type)
       else
-        # matrix is possibly invertible but ill-conditioned
-        # we normalize it by the determinant
-
-        scaling_matrix = Nx.reduce_max(Nx.abs(tensor), axes: [1], keep_axes: true)
-        # don't rescale for 0-norm rows
-        scaling_matrix = 1 / Nx.select(scaling_matrix == 0, 1, scaling_matrix)
-
         # We can think of the implementation as a system of equations.
         # Since we're scaling the left side by scaling_matrix[i] for each row i,
         # we need to also scale the right side.
@@ -927,15 +934,26 @@ defmodule Nx.LinAlg do
         # in fact, the same as putting the scaling values in the diagonal of the
         # right-side matrix.
 
-        normalized_tensor = scaling_matrix * tensor
-
         Nx.LinAlg.solve(
-          normalized_tensor,
+          safe_tensor,
           Nx.make_diagonal(Nx.squeeze(scaling_matrix, axes: [1]))
         )
       end
 
     Nx.revectorize(inverse, vectorized_axes, target_shape: input_shape)
+  end
+
+  # With vectorized input `singular` is vectorized, so both branches of the
+  # `if` in invert_tensor/1 run on every matrix. Solving a singular matrix
+  # raises on some backends, so the identity takes its place. Without
+  # vectorized axes only one branch runs, and the plain matrix is solved:
+  # referencing `singular` in that branch would make the evaluator compute
+  # the determinant a second time.
+  deftransformp solvable_tensor(tensor, singular, n) do
+    case tensor.vectorized_axes do
+      [] -> tensor
+      _ -> Nx.select(singular, Nx.eye(n), tensor)
+    end
   end
 
   deftransformp invert_shape(tensor) do
@@ -1836,8 +1854,8 @@ defmodule Nx.LinAlg do
             [2.75, -0.75]
           ],
           [
-            [-110.37471, 76.87479],
-            [92.24976, -64.24983]
+            [-110.375, 76.875],
+            [92.25, -64.25]
           ]
         ]
       >
