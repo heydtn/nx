@@ -562,6 +562,14 @@ defmodule Nx.LinAlg do
         ]
       >
 
+  If `a` is singular, the result contains infinities or NaNs:
+
+      iex> Nx.LinAlg.triangular_solve(Nx.tensor([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [1, 1, 1, 1]]), Nx.tensor([4, 2, 4, 2]))
+      #Nx.Tensor<
+        f32[4]
+        [Inf, NaN, NaN, NaN]
+      >
+
   ## Error cases
 
       iex> Nx.LinAlg.triangular_solve(Nx.tensor([[3, 0, 0, 0], [2, 1, 0, 0]]), Nx.tensor([4, 2, 4, 2]))
@@ -569,9 +577,6 @@ defmodule Nx.LinAlg do
 
       iex> Nx.LinAlg.triangular_solve(Nx.tensor([[3, 0, 0, 0], [2, 1, 0, 0], [1, 1, 1, 1], [1, 1, 1, 1]]), Nx.tensor([4]))
       ** (ArgumentError) incompatible dimensions for a and b on triangular solve
-
-      iex> Nx.LinAlg.triangular_solve(Nx.tensor([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [1, 1, 1, 1]]), Nx.tensor([4, 2, 4, 2]))
-      ** (ArgumentError) can't solve for singular matrix
 
       iex> a = Nx.tensor([[1, 0, 0], [1, 1, 0], [1, 1, 1]], type: :f64)
       iex> Nx.LinAlg.triangular_solve(a, Nx.tensor([1, 2, 1]), transform_a: :conjugate)
@@ -616,6 +621,10 @@ defmodule Nx.LinAlg do
 
   `A` must have shape `{..., n, n}` and `B` must have shape `{..., n, m}` or `{..., n}`.
   `X` has the same shape as `B`.
+
+  The default backend raises if the LU factorization of `A` finds a
+  zero pivot, which happens for some singular matrices. Other backends
+  may return infinities or NaNs instead.
 
   ## Examples
 
@@ -696,6 +705,9 @@ defmodule Nx.LinAlg do
 
       iex> Nx.LinAlg.solve(Nx.tensor([[3, 0, 0, 0], [2, 1, 0, 0], [1, 1, 1, 1]]), Nx.tensor([4]))
       ** (ArgumentError) `a` tensor has incompatible dimensions, expected a square matrix or a batch of square matrices, got: {3, 4}
+
+      iex> Nx.LinAlg.solve(Nx.tensor([[1, 2], [2, 4]]), Nx.tensor([1, 1]))
+      ** (ArgumentError) can't solve for singular matrix
   """
   # IMPORTANT: This function cannot be a defn because
   # optional needs to work on the actual backend.

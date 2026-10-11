@@ -33,6 +33,21 @@ defmodule Nx.BinaryBackend do
   end
 
   @impl true
+  def block(%Nx.Block.LinAlg.Solve{} = struct, %{type: type}, [a, _b] = args, fun) do
+    # Raise for the matrices LAPACK-based solvers report as singular.
+    # triangular_solve/3 itself returns infinities and NaNs for singular input.
+    %{type: {_, a_size} = a_type, shape: a_shape} = a
+    n = elem(a_shape, tuple_size(a_shape) - 1)
+    matrix_bit_size = n * n * a_size
+    matrices = for <<matrix::bitstring-size(^matrix_bit_size) <- to_binary(a)>>, do: matrix
+
+    if Enum.any?(matrices, &B.Matrix.lu_zero_pivot?(&1, a_type, {n, n}, type)) do
+      raise ArgumentError, "can't solve for singular matrix"
+    end
+
+    apply(fun, [struct | args])
+  end
+
   def block(struct, _output, args, fun) do
     apply(fun, [struct | args])
   end

@@ -89,6 +89,17 @@ defmodule Nx.LinAlgTest do
              ) ==
                Nx.LinAlg.triangular_solve(upper, b, left_side: false, lower: false)
     end
+
+    test "returns infinities and NaNs for singular matrices" do
+      a = Nx.tensor([[1.0, 0.0], [1.0, 0.0]])
+
+      assert_equal(
+        Nx.LinAlg.triangular_solve(a, Nx.tensor([1.0, 2.0])),
+        Nx.tensor([1.0, :infinity])
+      )
+
+      assert_equal(Nx.LinAlg.triangular_solve(a, Nx.tensor([1.0, 1.0])), Nx.tensor([1.0, :nan]))
+    end
   end
 
   describe "solve/2" do
@@ -118,6 +129,34 @@ defmodule Nx.LinAlgTest do
       result = ~VEC[i 2 -3i]
 
       assert_all_close(Nx.LinAlg.solve(a, b), result)
+    end
+
+    test "raises when LU finds a zero pivot" do
+      a = Nx.tensor([[[2, 0], [0, 4]], [[1, 2], [2, 4]]])
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a[1], Nx.tensor([1, 1]))
+      end
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a, Nx.tensor([[1, 1], [1, 1]]))
+      end
+    end
+
+    test "decides singularity the way LAPACK-based solvers do" do
+      # Real matrices are factored transposed, as PyTorch does for row-major
+      # tensors. In that order this matrix reaches an exact zero pivot...
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(
+          Nx.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]], type: :f64),
+          Nx.tensor([1, 1, 1], type: :f64)
+        )
+      end
+
+      # ...while this singular matrix does not: with fused multiply-adds its
+      # last pivot rounds to -2.4e-7, so torch.linalg.solve solves it too
+      assert %Nx.Tensor{shape: {2}} =
+               Nx.LinAlg.solve(Nx.tensor([[3.0, 5.0], [6.0, 10.0]]), Nx.tensor([1.0, 1.0]))
     end
   end
 

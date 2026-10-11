@@ -300,12 +300,13 @@ defmodule Nx.ComplexTest do
       end
     end
 
-    test "triangular_solve fails with singular complex matrix" do
+    test "triangular_solve returns NaN for singular complex matrix" do
       t = Nx.broadcast(Nx.tensor(0, type: {:c, 64}), {3, 3})
 
-      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
-        Nx.LinAlg.triangular_solve(t, t)
-      end
+      assert_equal(
+        Nx.LinAlg.triangular_solve(t, t),
+        Nx.broadcast(Nx.tensor(Complex.new(:nan, :nan)), {3, 3})
+      )
     end
   end
 end
