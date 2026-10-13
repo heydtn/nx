@@ -22,6 +22,7 @@
   * [Nx.LinAlg] Keep the input type in `Nx.LinAlg.invert/1` for f16 and bf16 matrices, instead of returning f32
   * [Nx.LinAlg] Return the inverse instead of NaN from `Nx.LinAlg.invert/1` for invertible matrices with small entries, and NaN for matrices that are singular to working precision rather than only for an exactly zero determinant
   * [Nx.LinAlg] Return NaN from `Nx.LinAlg.invert/1` for a singular matrix in a batch, instead of raising on backends whose solve raises for singular matrices
+  * [Nx.BinaryBackend] Raise from `Nx.LinAlg.solve/2` for matrices that are singular to working precision, not only when the triangular solve finds an exactly zero pivot
 
 ## v1.0.0 (2026-09-10)
 

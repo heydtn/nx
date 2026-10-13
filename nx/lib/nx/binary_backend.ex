@@ -33,6 +33,64 @@ defmodule Nx.BinaryBackend do
   end
 
   @impl true
+  def block(%Nx.Block.LinAlg.Solve{} = struct, _output, [a, _b] = args, fun) do
+    # Raise for matrices that are singular to working precision, rather than
+    # only when the triangular solves below find an exactly zero pivot.
+    %{type: {_, a_size} = a_type, shape: a_shape} = a
+    n = elem(a_shape, tuple_size(a_shape) - 1)
+    matrix_bit_size = n * n * a_size
+    matrices = for <<matrix::bitstring-size(^matrix_bit_size) <- to_binary(a)>>, do: matrix
+
+    # The check scales each row by the power of two Nx.LinAlg.invert/1 scales
+    # it by, with the exponent computed by the same operations in the same
+    # type, clipped to the normal range of the type. The magnitudes are taken
+    # in the floating type the matrix is factored in: the absolute value of
+    # an integer type's minimum wraps around.
+    floating_type = Nx.Type.to_floating(a_type)
+    floating = Nx.as_type(a, floating_type)
+    type = Nx.Type.to_real(floating_type)
+
+    smallest_normal =
+      type
+      |> Nx.Constants.smallest_positive_normal()
+      |> Nx.to_number()
+
+    min_exponent =
+      smallest_normal
+      |> :math.log2()
+      |> round()
+
+    max_exponent =
+      (2 / smallest_normal)
+      |> :math.log2()
+      |> round()
+
+    exponents =
+      floating
+      |> Nx.abs()
+      |> Nx.reduce_max(axes: [-1])
+      |> Nx.log2()
+      |> Nx.round()
+      |> Nx.clip(-max_exponent, -min_exponent)
+      |> Nx.to_flat_list()
+      |> Enum.chunk_every(n)
+
+    singular? = fn {matrix, matrix_exponents} ->
+      B.Matrix.singular?(matrix, a_type, {n, n}, matrix_exponents)
+    end
+
+    any_singular? =
+      matrices
+      |> Enum.zip(exponents)
+      |> Enum.any?(singular?)
+
+    if any_singular? do
+      raise ArgumentError, "can't solve for singular matrix"
+    end
+
+    apply(fun, [struct | args])
+  end
+
   def block(struct, _output, args, fun) do
     apply(fun, [struct | args])
   end

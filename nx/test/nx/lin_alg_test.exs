@@ -156,6 +156,231 @@ defmodule Nx.LinAlgTest do
 
       assert_all_close(Nx.LinAlg.solve(a, b), result)
     end
+
+    test "raises for singular matrices, alone and in a batch" do
+      a =
+        Nx.tensor([
+          [
+            [2, 0],
+            [0, 4]
+          ],
+          [
+            [1, 2],
+            [2, 4]
+          ]
+        ])
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a[1], Nx.tensor([1, 1]))
+      end
+
+      b =
+        Nx.tensor([
+          [1, 1],
+          [1, 1]
+        ])
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a, b)
+      end
+    end
+
+    test "raises for matrices that are singular to working precision" do
+      # exactly singular, but rounding leaves a tiny pivot instead of zero
+      t =
+        Nx.tensor([
+          [2, -1, -1, 0],
+          [2, 0, -1, 1],
+          [-1, 0, 1, 1],
+          [1, 2, -2, -2]
+        ])
+
+      ones = Nx.broadcast(1, {4})
+
+      for type <- [f: 32, f: 64] do
+        assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+          t
+          |> Nx.as_type(type)
+          |> Nx.LinAlg.solve(ones)
+        end
+      end
+
+      # badly scaled or graded, but solvable: a tiny pivot that no cancellation produced
+      for rows <- [
+            [
+              [1.0e6, 0.0],
+              [0.0, 1.0]
+            ],
+            [
+              [1.0e-3, 2.0],
+              [0.0, 1.0e3]
+            ],
+            [
+              [1.0, 0.0],
+              [1.0, 1.0e-6]
+            ]
+          ] do
+        a = Nx.tensor(rows)
+        b = Nx.tensor([1.0, 1.0])
+        x = Nx.LinAlg.solve(a, b)
+        assert_all_close(Nx.dot(a, x), b)
+      end
+
+      # The Hilbert matrix, 1 / (i + j - 1), is the classic ill-conditioned
+      # test matrix (Higham, ACM TOMS 17(3), 1991, doi:10.1145/114697.116805).
+      # At 4x4 its condition number is about 1.5e4, so a system is still
+      # solvable in f32, to about two digits.
+      entries = for i <- 1..4, j <- 1..4, do: 1 / (i + j - 1)
+
+      hilbert =
+        entries
+        |> Nx.tensor()
+        |> Nx.reshape({4, 4})
+
+      x = Nx.LinAlg.solve(hilbert, ones)
+      assert_all_close(Nx.dot(hilbert, x), ones, atol: 1.0e-2)
+    end
+
+    test "decides like invert/1 for bf16 rows whose magnitude is a half power of two" do
+      # log2 of these row maxima lands on a tie in bf16 but not in f64, so
+      # the check must take the exponent invert/1 takes
+      a =
+        Nx.tensor(
+          [
+            [90.5, 90.5, 0.0],
+            [-0.06591796875, 0.08837890625, 0.08837890625],
+            [-11.3125, -5.65625, 2.828125]
+          ],
+          type: :bf16
+        )
+
+      assert_equal(Nx.LinAlg.invert(a), Nx.broadcast(:nan, {3, 3}))
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a, Nx.tensor([1, 1, 1]))
+      end
+    end
+
+    test "decides like invert/1 when a pivot is within a rounding of its tolerance" do
+      # a pivot of this matrix is below the tolerance times its subtracted sum
+      # when the product is computed in f64, and above it when the sum and the
+      # product are rounded to bf16 as invert/1 computes them, so the check
+      # must round the same way
+      a =
+        Nx.tensor(
+          [
+            [0, 2, 2, -3, -3],
+            [-1, 2, 0, 2, 0],
+            [-2, 1, -2, 2, 3],
+            [0, -3, -2, 0, 0],
+            [2, -1, 1, 1, 3]
+          ],
+          type: :bf16
+        )
+
+      assert_equal(Nx.is_nan(Nx.LinAlg.invert(a)), Nx.broadcast(0, {5, 5}))
+
+      x = Nx.LinAlg.solve(a, Nx.tensor([1, 1, 1, 1, 1], type: :bf16))
+      assert_equal(Nx.is_nan(x), Nx.broadcast(0, {5}))
+    end
+
+    test "raises for complex matrices that are singular to working precision" do
+      # the determinant is -1 - i * i = 0
+      singular = ~MAT[
+        1 i
+        i -1
+      ]
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(singular, Nx.tensor([1, 1]))
+      end
+
+      a = ~MAT[
+        1 i
+        i 1
+      ]
+
+      b = Nx.tensor([1, 1])
+      x = Nx.LinAlg.solve(a, b)
+      assert_all_close(Nx.dot(a, x), b)
+    end
+
+    test "solves well-conditioned systems in every type" do
+      # LAPACK's test suite builds random matrices with a prescribed condition
+      # number and expects systems with cond * epsilon <= 0.1 to be solvable,
+      # after the perturbation bound of Higham, Accuracy and Stability of
+      # Numerical Algorithms, 2nd ed., SIAM, 2002, ch. 7; these are its cond 2
+      # and cond 0.1 / epsilon types
+      for type <- [f: 64, f: 32, f: 16, bf: 16], n <- [4, 8, 16] do
+        epsilon =
+          type
+          |> Nx.Constants.epsilon()
+          |> Nx.to_number()
+
+        for cond <- [2.0, 0.1 / epsilon] do
+          a = conditioned_matrices(n, cond, 10, type)
+          b = Nx.broadcast(1, {10, n})
+          x = Nx.LinAlg.solve(a, b)
+
+          for i <- 0..9 do
+            product = Nx.dot(a[i], x[i])
+            assert relative_residual(product, b[i], a[i], x[i]) <= 32 * n * epsilon
+          end
+        end
+      end
+    end
+
+    test "raises when the elimination overflows the type" do
+      # The Wilkinson matrix is the classic example of pivot growth (Wilkinson,
+      # J. ACM 8(3), 1961, doi:10.1145/321075.321076): every elimination step
+      # doubles its last column, so the last pivot is 2 ** (n - 1), beyond f16
+      # from n = 17.
+      a = wilkinson(17, :f16)
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.solve(a, Nx.broadcast(1, {17}))
+      end
+    end
+
+    test "solves systems whose matrix holds the minimum of a signed integer type" do
+      # the absolute value of the minimum wraps around in the integer type, so
+      # the row magnitudes must be taken after the cast to the floating type
+      for width <- [8, 16, 32, 64] do
+        minimum = -(2 ** (width - 1))
+
+        a =
+          Nx.tensor(
+            [
+              [minimum, 0],
+              [0, 1]
+            ],
+            type: {:s, width}
+          )
+
+        x = Nx.LinAlg.solve(a, Nx.tensor([1, 1]))
+
+        assert_equal(x, Nx.tensor([1 / minimum, 1.0]))
+      end
+    end
+
+    test "solves a system whose rows are below the normal range of f64" do
+      # the singularity check scales rows by a power of two clamped to the type's range
+      m = 2.0 ** -1024
+      big = 2.0 ** 1023
+
+      a =
+        Nx.tensor(
+          [
+            [m, m],
+            [m, -m]
+          ],
+          type: :f64
+        )
+
+      x = Nx.LinAlg.solve(a, Nx.tensor([1.0, 0.0]))
+
+      assert_equal(x, Nx.tensor([big, big], type: :f64))
+    end
   end
 
   describe "invert" do
