@@ -851,10 +851,11 @@ defmodule Nx.LinAlg do
   counts as singular when a pivot of its LU factorization is no larger than
   the rounding error allowed for n operations in its type times the sum of
   the magnitudes of the products subtracted to form it: 2 * n * epsilon in
-  f32 and f64, and in f16 and bf16 4 * sqrt(n) * epsilon once that is the
-  smaller, from n = 5. Matrices that are singular to working precision
-  therefore return NaN too, and so does one with a pivot that overflows the
-  type. In a batch, only the singular matrices are NaN.
+  f32 and f64, in f16 and bf16 4 * sqrt(n) * epsilon once that is the
+  smaller, from n = 5, and in bf16 at most 12 * epsilon. Matrices that are
+  singular to working precision therefore return NaN too, and so does one
+  with a pivot that overflows the type. In a batch, only the singular
+  matrices are NaN.
 
       iex> Nx.LinAlg.invert(Nx.tensor([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [1, 1, 1, 1]]))
       #Nx.Tensor<
