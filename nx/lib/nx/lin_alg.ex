@@ -1036,20 +1036,23 @@ defmodule Nx.LinAlg do
   # measurement, balancing singular matrices missed against nonsingular
   # ones flagged:
   #
-  #   * f16, bf16, f32, f64: Rump and Jeannerod, SIAM J. Matrix Anal. Appl. 35(2), 2014,
+  #   * f32, f64: Rump and Jeannerod, SIAM J. Matrix Anal. Appl. 35(2), 2014,
   #     doi:10.1137/130927231
   #   * c64, c128: the same, with Brent, Percival and Zimmermann, Math.
   #     Comp. 76(259), 2007, doi:10.1090/S0025-5718-07-01931-X
+  #   * f16, bf16: Higham and Mary, SIAM J. Sci. Comput. 41(5), 2019,
+  #     doi:10.1137/18M1226312
   #   * 8-bit types: measurement
   #
   # Integer types reach this as f32.
   defp rounding_error_multiplier({kind, _} = type, _n) when kind in [:s, :u],
     do: raise(ArgumentError, "invert/1 expects a floating-point type, got: #{inspect(type)}")
 
-  defp rounding_error_multiplier({_, 8}, _n), do: 0.5
+  defp rounding_error_multiplier(type, n) when type in [{:bf, 16}, {:f, 16}],
+    do: min(2 * n, 4 * :math.sqrt(n))
 
-  defp rounding_error_multiplier(type, n) when type in [{:bf, 16}, {:f, 16}, {:f, 32}, {:f, 64}],
-    do: 2 * n
+  defp rounding_error_multiplier({_, 8}, _n), do: 0.5
+  defp rounding_error_multiplier({:f, size}, n) when size in [32, 64], do: 2 * n
 
   defp rounding_error_multiplier({:c, size}, n) when size in [64, 128],
     do: 2 * (n - 1 + :math.sqrt(5))
