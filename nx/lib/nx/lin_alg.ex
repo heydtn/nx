@@ -849,9 +849,10 @@ defmodule Nx.LinAlg do
 
   If a singular matrix is passed, the result will silently fail. A matrix
   counts as singular when a pivot of its LU factorization is no larger than
-  the rounding error allowed for n operations in its type, 2 * n * epsilon,
-  times the sum of the magnitudes of the products subtracted to form it.
-  Matrices that are singular to working precision
+  the rounding error allowed for n operations in its type times the sum of
+  the magnitudes of the products subtracted to form it: 2 * n * epsilon in
+  f32 and f64, and in f16 and bf16 4 * sqrt(n) * epsilon once that is the
+  smaller, from n = 5. Matrices that are singular to working precision
   therefore return NaN too, and so does one with a pivot that overflows the
   type. In a batch, only the singular matrices are NaN.
 
