@@ -776,6 +776,13 @@ defmodule Nx.Type do
   def epsilon_binary(type),
     do: raise(ArgumentError, "only floating types are supported, got: #{inspect(type)}")
 
+  # The rounding error to allow for after n operations in the type, as a
+  # multiple of its epsilon: twice the worst case (Rump and Jeannerod, SIAM
+  # J. Matrix Anal. Appl. 35(2), 2014, doi:10.1137/130927231), since errors
+  # in earlier pivots propagate into later ones.
+  @doc false
+  def rounding_error_multiplier(_type, n), do: 2 * n
+
   defp unsigned_size(x) when x <= 1, do: 1
   defp unsigned_size(x) when x <= 255, do: 8
   defp unsigned_size(x) when x <= 65535, do: 16
