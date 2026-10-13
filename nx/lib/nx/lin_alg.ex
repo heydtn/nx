@@ -1040,17 +1040,17 @@ defmodule Nx.LinAlg do
   #     doi:10.1137/130927231
   #   * c64, c128: the same, with Brent, Percival and Zimmermann, Math.
   #     Comp. 76(259), 2007, doi:10.1090/S0025-5718-07-01931-X
-  #   * f16, bf16: Higham and Mary, SIAM J. Sci. Comput. 41(5), 2019,
+  #   * f16: Higham and Mary, SIAM J. Sci. Comput. 41(5), 2019,
   #     doi:10.1137/18M1226312
+  #   * bf16: the same, capped by measurement
   #   * 8-bit types: measurement
   #
   # Integer types reach this as f32.
   defp rounding_error_multiplier({kind, _} = type, _n) when kind in [:s, :u],
     do: raise(ArgumentError, "invert/1 expects a floating-point type, got: #{inspect(type)}")
 
-  defp rounding_error_multiplier(type, n) when type in [{:bf, 16}, {:f, 16}],
-    do: min(2 * n, 4 * :math.sqrt(n))
-
+  defp rounding_error_multiplier({:bf, 16}, n), do: Enum.min([2 * n, 4 * :math.sqrt(n), 12])
+  defp rounding_error_multiplier({:f, 16}, n), do: min(2 * n, 4 * :math.sqrt(n))
   defp rounding_error_multiplier({_, 8}, _n), do: 0.5
   defp rounding_error_multiplier({:f, size}, n) when size in [32, 64], do: 2 * n
 
