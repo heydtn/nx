@@ -202,6 +202,7 @@ defmodule Torchx.NxLinAlgTest do
         Nx.broadcast(:nan, {4, 4})
       )
     end
+
   end
 
   describe "qr" do
@@ -239,6 +240,23 @@ defmodule Torchx.NxLinAlgTest do
 
         assert_all_close(a, a_reconstructed)
       end
+    end
+
+    test "factors singular matrices" do
+      a =
+        Nx.tensor([
+          [1.0, 2.0],
+          [2.0, 4.0]
+        ])
+
+      {p, l, u} = Nx.LinAlg.lu(a)
+
+      a_reconstructed =
+        p
+        |> Nx.dot(l)
+        |> Nx.dot(u)
+
+      assert_all_close(a_reconstructed, a)
     end
   end
 
