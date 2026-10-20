@@ -134,20 +134,8 @@ defmodule Nx.Shared do
     do: var
 
   defp write_bin_modifier(var, :bf, _) do
-    if System.endianness() == :little do
-      quote do
-        case unquote(var) do
-          x when is_number(x) -> binary_part(<<x::float-native-32>>, 2, 2)
-          x -> Nx.Floating.dump_bf16(x)
-        end :: binary
-      end
-    else
-      quote do
-        case unquote(var) do
-          x when is_number(x) -> binary_part(<<x::float-native-32>>, 0, 2)
-          x -> Nx.Floating.dump_bf16(x)
-        end :: binary
-      end
+    quote do
+      Nx.Floating.dump_bf16(unquote(var)) :: binary
     end
   end
 

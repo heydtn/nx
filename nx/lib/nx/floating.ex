@@ -4,6 +4,10 @@ defmodule Nx.Floating do
   not supported by the Erlang VM.
   """
 
+  import Bitwise
+
+  @compile {:inline, round_to_nearest_even: 4, shift_to_nearest_even: 2}
+
   ## BF16
 
   @doc """
@@ -57,10 +61,10 @@ defmodule Nx.Floating do
       :nan
 
   """
-  if System.endianness() == :little do
-    def dump_bf16(x) when is_number(x), do: binary_part(<<x::float-native-32>>, 2, 2)
-  else
-    def dump_bf16(x) when is_number(x), do: binary_part(<<x::float-native-32>>, 0, 2)
+  def dump_bf16(x) when is_number(x) do
+    <<sign::1, exponent::11, fraction::52>> = <<x::float-64>>
+    bits = round_to_nearest_even(exponent, fraction, 8, 7)
+    <<sign <<< 15 ||| min(bits, 0x7F80)::16-native>>
   end
 
   def dump_bf16(:infinity), do: unquote(Nx.Type.infinity_binary({:bf, 16}))
@@ -90,7 +94,7 @@ defmodule Nx.Floating do
   def load_f8(<<0x7C::8-native>>), do: :infinity
   def load_f8(<<_sign::1, 31::5, mantissa::2>>) when mantissa != 0, do: :nan
 
-  # E5M2 is the high byte of an F16, as dump_f8/1 writes it.
+  # E5M2 is the high byte of an F16.
   def load_f8(<<byte::8>>) do
     <<float::float-big-16>> = <<byte, 0>>
     float
@@ -111,10 +115,10 @@ defmodule Nx.Floating do
       :nan
 
   """
-  if System.endianness() == :little do
-    def dump_f8(x) when is_number(x), do: binary_part(<<x::float-native-16>>, 1, 1)
-  else
-    def dump_f8(x) when is_number(x), do: binary_part(<<x::float-native-16>>, 0, 1)
+  def dump_f8(x) when is_number(x) do
+    <<sign::1, exponent::11, fraction::52>> = <<x::float-64>>
+    bits = round_to_nearest_even(exponent, fraction, 5, 2)
+    <<sign::1, min(bits, 0x7C)::7>>
   end
 
   def dump_f8(:infinity), do: unquote(Nx.Type.infinity_binary({:f, 8}))
@@ -204,47 +208,10 @@ defmodule Nx.Floating do
   """
   # E4M3FN: 1 sign, 4 exponent (bias 7), 3 mantissa
   # Max value: 448.0 (0x7E), Min value: -448.0 (0xFE)
-  def dump_f8_e4m3fn(0), do: <<0b0000_0000>>
-  def dump_f8_e4m3fn(+0.0), do: <<0b0000_0000>>
-  def dump_f8_e4m3fn(-0.0), do: <<0b1000_0000>>
-
   def dump_f8_e4m3fn(x) when is_number(x) do
-    # Clamp to E4M3FN range and convert
-    # E4M3FN max is 448.0, min is -448.0
-    clamped = max(-448.0, min(448.0, x * 1.0))
-
-    # Extract sign
-    {sign, abs_val} = if clamped < 0, do: {1, -clamped}, else: {0, clamped}
-
-    # Calculate exponent and mantissa
-    # E4M3FN: value = (1 + mantissa/8) * 2^(exp - 7) for normalized
-    log2_val = :math.log2(abs_val)
-    exp_unbiased = floor(log2_val)
-    exp = exp_unbiased + 7
-
-    cond do
-      exp <= 0 ->
-        # Denormalized: value = mantissa/8 * 2^(-6)
-        mantissa = round(abs_val / :math.pow(2, -6) * 8)
-        <<sign::1, 0::4, min(7, mantissa)::3>>
-
-      exp > 15 ->
-        # Overflow to max finite (not NaN, since E4M3FN saturates in our impl)
-        <<sign::1, 15::4, 6::3>>
-
-      true ->
-        # Normalized: value = (1 + mantissa/8) * 2^(exp - 7)
-        significand = abs_val / :math.pow(2, exp_unbiased)
-        mantissa = round((significand - 1.0) * 8)
-        mantissa = max(0, min(7, mantissa))
-
-        # exp=15 with mantissa=7 would be NaN, cap at 6
-        if exp == 15 and mantissa >= 7 do
-          <<sign::1, 15::4, 6::3>>
-        else
-          <<sign::1, exp::4, mantissa::3>>
-        end
-    end
+    <<sign::1, exponent::11, fraction::52>> = <<x::float-64>>
+    bits = round_to_nearest_even(exponent, fraction, 4, 3)
+    <<sign::1, min(bits, 0x7E)::7>>
   end
 
   # Saturate infinity to max/min finite values (not NaN)
@@ -252,4 +219,36 @@ defmodule Nx.Floating do
   def dump_f8_e4m3fn(:infinity), do: unquote(Nx.Type.infinity_binary({:f8_e4m3fn, 8}))
   def dump_f8_e4m3fn(:neg_infinity), do: unquote(Nx.Type.neg_infinity_binary({:f8_e4m3fn, 8}))
   def dump_f8_e4m3fn(:nan), do: unquote(Nx.Type.nan_binary({:f8_e4m3fn, 8}))
+
+  # The exponent and mantissa bits of an f64, given by its exponent and
+  # fraction fields, rounded to the nearest value of the format, ties to even.
+  # On overflow the bits pass the largest exponent.
+  defp round_to_nearest_even(exponent, fraction, exponent_bits, mantissa_bits) do
+    bias = (1 <<< (exponent_bits - 1)) - 1
+    unbiased = exponent - 1023
+    dropped = 52 - mantissa_bits
+
+    cond do
+      exponent == 0 ->
+        0
+
+      unbiased >= 1 - bias ->
+        ((unbiased + bias) <<< mantissa_bits) + shift_to_nearest_even(fraction, dropped)
+
+      true ->
+        shift_to_nearest_even(1 <<< 52 ||| fraction, dropped + 1 - bias - unbiased)
+    end
+  end
+
+  defp shift_to_nearest_even(value, shift) do
+    quotient = value >>> shift
+    remainder = value &&& (1 <<< shift) - 1
+    half = 1 <<< (shift - 1)
+
+    if remainder > half or (remainder == half and (quotient &&& 1) == 1) do
+      quotient + 1
+    else
+      quotient
+    end
+  end
 end

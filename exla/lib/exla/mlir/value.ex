@@ -1014,7 +1014,9 @@ defmodule EXLA.MLIR.Value do
   end
 
   defp bf16_to_big(x) do
-    binary_part(<<x::float-big-32>>, 0, 2)
+    x
+    |> Nx.Floating.dump_bf16()
+    |> native_to_big()
   end
 
   defp native_to_big(binary) do

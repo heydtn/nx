@@ -1111,16 +1111,13 @@ defmodule Nx.Random do
     stop_grad(-Nx.log(-Nx.log(u)))
   end
 
-  deftransformp next_after_minus_1({_, bits}) do
-    # Get the floating point representation of -1 and
-    # convert it to a big integer so the precision comes last (after exponent)
-    <<x::size(^bits)-big>> = <<-1::float-size(bits)-big>>
+  deftransformp next_after_minus_1(type) do
+    epsilon =
+      type
+      |> Nx.Constants.epsilon(backend: Nx.BinaryBackend)
+      |> Nx.to_number()
 
-    # Decrement the precision by one (decrement because the sign is separate)
-    # and convert it back to a float
-    <<f::float-size(^bits)-big>> = <<x - 1::integer-size(bits)-big>>
-
-    f
+    -1 + epsilon / 2
   end
 
   deftransformp float_or_complex(key, type, shape, fun) do

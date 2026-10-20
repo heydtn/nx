@@ -1,6 +1,8 @@
 defmodule Nx.FloatingTest do
   use ExUnit.Case, async: true
 
+  import Bitwise
+
   doctest Nx.Floating
 
   # Complete lookup table of all 256 E4M3FN binary ↔ float pairs
@@ -343,6 +345,29 @@ defmodule Nx.FloatingTest do
       assert Nx.Floating.load_f8_e4m3fn(<<0x7F>>) == :nan
       assert Nx.Floating.load_f8_e4m3fn(<<0xFF>>) == :nan
     end
+
+    test "rounds to nearest, ties to even" do
+      assert_rounds_to_nearest_even(
+        &Nx.Floating.load_f8_e4m3fn/1,
+        &Nx.Floating.dump_f8_e4m3fn/1,
+        0x7E,
+        8
+      )
+    end
+
+    test "saturates past the largest finite value" do
+      assert Nx.Floating.dump_f8_e4m3fn(464.0) == <<0x7E>>
+      assert Nx.Floating.dump_f8_e4m3fn(1.0e30) == <<0x7E>>
+      assert Nx.Floating.dump_f8_e4m3fn(-1.0e30) == <<0xFE>>
+    end
+
+    test "tensors round to nearest, ties to even" do
+      # Halfway between 1 and 1.125
+      assert Nx.tensor([1.0625], type: :f8_e4m3fn) |> Nx.to_flat_list() == [1.0]
+
+      sum = Nx.add(Nx.tensor(1.0, type: :f8_e4m3fn), Nx.tensor(0.0625, type: :f8_e4m3fn))
+      assert Nx.to_number(sum) == 1.0
+    end
   end
 
   describe "f8" do
@@ -409,6 +434,25 @@ defmodule Nx.FloatingTest do
         assert Nx.Floating.dump_f8(Nx.Floating.load_f8(<<byte>>)) == <<byte>>
       end
     end
+
+    test "rounds to nearest, ties to even" do
+      assert_rounds_to_nearest_even(&Nx.Floating.load_f8/1, &Nx.Floating.dump_f8/1, 0x7B, 8)
+    end
+
+    test "rounds past the largest finite value to infinity" do
+      # 61440 is halfway between 57344, the largest finite value, and 65536
+      assert Nx.Floating.dump_f8(61_439.0) == <<0x7B>>
+      assert Nx.Floating.dump_f8(61_440.0) == <<0x7C>>
+      assert Nx.Floating.dump_f8(-61_440.0) == <<0xFC>>
+    end
+
+    test "tensors round to nearest" do
+      # 1 + 0.75 epsilon
+      assert Nx.tensor([1.1875], type: :f8) |> Nx.to_flat_list() == [1.25]
+
+      sum = Nx.add(Nx.tensor(1.0, type: :f8), Nx.tensor(0.1875, type: :f8))
+      assert Nx.to_number(sum) == 1.25
+    end
   end
 
   describe "bf16" do
@@ -456,6 +500,49 @@ defmodule Nx.FloatingTest do
       # -0: sign bit set, rest zero
       assert Nx.Floating.dump_bf16(-0.0) == <<0x8000::16-native>>
       assert Nx.Floating.load_bf16(<<0x8000::16-native>>) == -0.0
+    end
+
+    test "rounds to nearest, ties to even" do
+      assert_rounds_to_nearest_even(
+        &Nx.Floating.load_bf16/1,
+        &Nx.Floating.dump_bf16/1,
+        0x7F7F,
+        16
+      )
+    end
+
+    test "rounds past the largest finite value to infinity" do
+      largest = Nx.Floating.load_bf16(<<0x7F7F::16-native>>)
+      halfway = (largest + :math.pow(2, 128)) / 2
+      assert Nx.Floating.dump_bf16(halfway - :math.pow(2, 100)) == <<0x7F7F::16-native>>
+      assert Nx.Floating.dump_bf16(halfway) == <<0x7F80::16-native>>
+      assert Nx.Floating.dump_bf16(-halfway) == <<0xFF80::16-native>>
+    end
+
+    test "tensors round to nearest" do
+      # 1 + 0.75 epsilon
+      assert Nx.tensor([1.005859375], type: :bf16) |> Nx.to_flat_list() == [1.0078125]
+
+      sum = Nx.add(Nx.tensor(1.0, type: :bf16), Nx.tensor(0.005859375, type: :bf16))
+      assert Nx.to_number(sum) == 1.0078125
+    end
+  end
+
+  defp assert_rounds_to_nearest_even(load, dump, max_code, size) do
+    sign_bit = 1 <<< (size - 1)
+
+    for code <- 0..(max_code - 1), sign <- [0, sign_bit] do
+      low_binary = <<sign ||| code::size(size)-native>>
+      high_binary = <<sign ||| code + 1::size(size)-native>>
+      low = load.(low_binary)
+      high = load.(high_binary)
+      quarter = (high - low) / 4
+      even_binary = if rem(code, 2) == 0, do: low_binary, else: high_binary
+
+      assert dump.(low) == low_binary
+      assert dump.(low + quarter) == low_binary
+      assert dump.(low + 2 * quarter) == even_binary
+      assert dump.(high - quarter) == high_binary
     end
   end
 end

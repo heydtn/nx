@@ -111,14 +111,14 @@ defmodule Nx.RandomTest do
 
       # inference
       assert Nx.Random.uniform_split(key, Nx.tensor(0, type: :bf16), Nx.tensor(100, type: :bf16)) ==
-               Nx.tensor(42.75, type: :bf16)
+               Nx.tensor(43.0, type: :bf16)
 
       # int to float cast
-      assert Nx.Random.uniform_split(key, 0, 100, type: :bf16) == Nx.tensor(42.75, type: :bf16)
+      assert Nx.Random.uniform_split(key, 0, 100, type: :bf16) == Nx.tensor(43.0, type: :bf16)
 
       # f32 to bf16 downcast
       assert Nx.Random.uniform_split(key, 0.0, 100.0, type: :bf16) ==
-               Nx.tensor(42.75, type: :bf16)
+               Nx.tensor(43.0, type: :bf16)
 
       # upcast
       assert Nx.Random.uniform_split(key, 0.0, 100.0, type: :f64) ==
@@ -139,14 +139,14 @@ defmodule Nx.RandomTest do
 
       # inference
       assert Nx.Random.normal_split(key, Nx.tensor(0, type: :bf16), Nx.tensor(100, type: :bf16)) ==
-               Nx.tensor(-17.625, type: :bf16)
+               Nx.tensor(-17.25, type: :bf16)
 
       # int to float cast
-      assert Nx.Random.normal_split(key, 0, 100, type: :bf16) == Nx.tensor(-17.625, type: :bf16)
+      assert Nx.Random.normal_split(key, 0, 100, type: :bf16) == Nx.tensor(-17.25, type: :bf16)
 
       # f32 to bf16 downcast
       assert Nx.Random.normal_split(key, 0.0, 100.0, type: :bf16) ==
-               Nx.tensor(-17.625, type: :bf16)
+               Nx.tensor(-17.25, type: :bf16)
 
       # f32 to f16 downcast
       assert Nx.Random.normal_split(key, 0.0, 100.0, type: :f16) ==
@@ -187,7 +187,7 @@ defmodule Nx.RandomTest do
                Nx.tensor([0.0, 0.0], type: :f32),
                Nx.eye(2, type: :f32),
                type: :bf16
-             ) == Nx.tensor([0.0146484375, 0.1318359375], type: :bf16)
+             ) == Nx.tensor([0.0245361328125, 0.142578125], type: :bf16)
 
       # f32 to f16 downcast
       assert Nx.Random.multivariate_normal_split(
@@ -316,6 +316,14 @@ defmodule Nx.RandomTest do
 
       assert_all_close(Nx.mean(normal), 10, rtol: 0.1)
       assert_all_close(Nx.standard_deviation(normal), 5, rtol: 0.1)
+    end
+
+    test "bf16 normal samples are finite" do
+      # the smallest uniform draw maps to the bf16 value just above -1,
+      # whose inverse error function is finite
+      key = Nx.Random.key(3)
+      {normal, _key} = Nx.Random.normal(key, shape: {10_000}, type: :bf16)
+      assert normal |> Nx.is_infinity() |> Nx.any() |> Nx.to_number() == 0
     end
 
     test "multivariate_normal properties" do

@@ -64,6 +64,26 @@ defmodule EXLA.Defn.ExprTest do
       assert_equal(add_2x2_attribute(1), Nx.tensor([[2, 3], [4, 5]]))
       assert_equal(add_2x2_attribute(Nx.tensor([1, 2])), Nx.tensor([[2, 4], [4, 6]]))
     end
+
+    defn add_constant(a, opts) do
+      assert_keys(opts, [:c])
+      a + opts[:c]
+    end
+
+    test "rounds constants to nearest, ties to even" do
+      # Inside defn, Nx converts all three values to the tensor's type itself;
+      # eager arithmetic leaves the bf16 and E4M3FN conversions to XLA.
+      # Truncating rounds 1 + 0.75 epsilon down, and rounding ties away from zero
+      # rounds 1 + epsilon / 2 up.
+      bf16_sum = Nx.tensor(0, type: :bf16) |> add_constant(c: 1.005859375)
+      assert_equal(bf16_sum, Nx.tensor(1.0078125, type: :bf16))
+
+      f8_sum = Nx.tensor(0, type: :f8) |> add_constant(c: 1.1875)
+      assert_equal(f8_sum, Nx.tensor(1.25, type: :f8))
+
+      f8_e4m3fn_sum = Nx.tensor(0, type: :f8_e4m3fn) |> add_constant(c: 1.0625)
+      assert_equal(f8_e4m3fn_sum, Nx.tensor(1.0, type: :f8_e4m3fn))
+    end
   end
 
   describe "non finite" do
