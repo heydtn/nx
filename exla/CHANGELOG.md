@@ -13,6 +13,7 @@
   * Do not donate the inputs of eager `EXLA.Backend` operations, which raised for donatable tensors passed to operations that change their shape
   * Compile every `Nx.block/4` body on its own instead of sharing one compiled body between blocks with the same struct and argument shapes
   * Support f16 in `Nx.LinAlg.triangular_solve/3` on CUDA, which raised "Invalid type for triangular solve"
+  * Round f64 and 32 and 64-bit integers once when converting them to f16, bf16 and the f8 types, which rounded twice through f32 on the host or on CUDA, and keep the bf16 subnormals of f64 values on the host, which were flushed to zero
 
 ## v1.0.0 (2026-09-10)
 

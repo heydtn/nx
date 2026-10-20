@@ -1199,6 +1199,57 @@ defmodule EXLA.Defn.ExprTest do
         Nx.tensor([32767, 0, -32768], type: {:s, 16})
       )
     end
+
+    test "rounds f64 to the nearest value of narrow types once" do
+      # just past the midpoints on either side of 1 + ulp, where rounding
+      # through f32 first lands on the midpoint and ties to the even neighbor
+      for {type, ulp} <- [
+            {{:f, 16}, 2 ** -10},
+            {{:bf, 16}, 2 ** -7},
+            {{:f, 8}, 2 ** -2},
+            {{:f8_e4m3fn, 8}, 2 ** -3}
+          ] do
+        t =
+          Nx.tensor([1 + ulp / 2 + 2 ** -40, 1 + 3 * ulp / 2 - 2 ** -40, -1 - ulp / 2 - 2 ** -40],
+            type: :f64
+          )
+
+        assert_equal(
+          generic_as_type(t, Nx.template({}, type)),
+          Nx.tensor([1 + ulp, 1 + ulp, -1 - ulp], type: type)
+        )
+      end
+    end
+
+    test "keeps the subnormals of bf16 when rounding f64" do
+      t = Nx.tensor([2 ** -130 + 2 ** -140, -(2 ** -133)], type: :f64)
+      result = generic_as_type(t, Nx.template({}, {:bf, 16}))
+
+      # compared as bits, since the host compares subnormals as zero
+      assert_equal(
+        Nx.bitcast(result, {:u, 16}),
+        Nx.bitcast(Nx.tensor([2 ** -130, -(2 ** -133)], type: {:bf, 16}), {:u, 16})
+      )
+    end
+
+    test "rounds wide integers to the nearest value of bf16 once" do
+      # just past the midpoints on either side of 2 ** k * (1 + ulp), where
+      # rounding through f32 first lands on the midpoint
+      for {type, k} <- [{{:s, 32}, 30}, {{:u, 32}, 31}, {{:s, 64}, 62}, {{:u, 64}, 63}] do
+        values = [2 ** k + 2 ** (k - 8) + 1, 2 ** k + 3 * 2 ** (k - 8) - 1]
+        expected = List.duplicate(2 ** k + 2 ** (k - 7), 2)
+
+        {values, expected} =
+          if elem(type, 0) == :s,
+            do: {values ++ [-hd(values)], expected ++ [-hd(expected)]},
+            else: {values, expected}
+
+        assert_equal(
+          generic_as_type(Nx.tensor(values, type: type), Nx.template({}, {:bf, 16})),
+          Nx.tensor(expected, type: {:bf, 16})
+        )
+      end
+    end
   end
 
   describe "bitcast" do

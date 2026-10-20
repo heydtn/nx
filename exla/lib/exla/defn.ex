@@ -2378,14 +2378,176 @@ defmodule EXLA.Defn do
     )
   end
 
+  # XLA converts f64 and 32 and 64-bit integers to these types through an
+  # intermediate type on some platforms, which rounds twice, and on the host
+  # it flushes the subnormals of the result to zero. Those conversions round
+  # in integer arithmetic instead. Each format is its exponent and mantissa
+  # bits, and the bits a value past its largest finite one takes: infinity,
+  # or NaN in E4M3FN, which has no infinity.
+  @narrow_float_formats %{
+    {:f, 16} => {5, 10, 0x7C00},
+    {:bf, 16} => {8, 7, 0x7F80},
+    {:f, 8} => {5, 2, 0x7C},
+    {:f8_e4m3fn, 8} => {4, 3, 0x7F}
+  }
+
+  @wide_types [{:f, 64}, {:s, 32}, {:u, 32}, {:s, 64}, {:u, 64}]
+
   defp to_type(%Value{} = op, type) do
     typespec = Value.get_typespec(op)
 
-    if typespec.type == type do
-      op
-    else
-      Value.convert(op, Typespec.to_type(typespec, type))
+    cond do
+      typespec.type == type ->
+        op
+
+      typespec.type in @wide_types and Map.has_key?(@narrow_float_formats, type) ->
+        round_to_format(op, type)
+
+      true ->
+        Value.convert(op, Typespec.to_type(typespec, type))
     end
+  end
+
+  defp round_to_format(%Value{} = op, target) do
+    case Value.get_typespec(op).type do
+      {:f, 64} -> round_float_to_format(op, target)
+      _integer -> round_integer_to_format(op, target)
+    end
+  end
+
+  # The bits of the nearest value of the format, ties to even
+  defp round_float_to_format(%Value{function: function} = op, {_, size} = target) do
+    {exponent_bits, mantissa_bits, overflow} = Map.fetch!(@narrow_float_formats, target)
+    %{shape: shape} = Value.get_typespec(op)
+    bits_typespec = Typespec.tensor({:u, 64}, shape)
+    pred_typespec = Typespec.tensor({:pred, 8}, shape)
+    target_typespec = Typespec.tensor(target, shape)
+    constant = &Value.broadcast_in_dim(to_constant(function, &1, {:u, 64}), [], bits_typespec)
+    bias = 2 ** (exponent_bits - 1) - 1
+    dropped = 52 - mantissa_bits
+
+    bits = Value.bitcast_convert(op, bits_typespec)
+    exponent = Value.right_shift_logical(bits, constant.(52), bits_typespec)
+    exponent = Value.bitwise_and(exponent, constant.(0x7FF), bits_typespec)
+    fraction = Value.bitwise_and(bits, constant.(2 ** 52 - 1), bits_typespec)
+    sign = Value.right_shift_logical(bits, constant.(63), bits_typespec)
+    sign = Value.left_shift(sign, constant.(size - 1), bits_typespec)
+
+    # A carry out of the rounded fraction moves into the exponent
+    normal_exponent = Value.subtract(exponent, constant.(1023 - bias), bits_typespec)
+    normal_exponent = Value.left_shift(normal_exponent, constant.(mantissa_bits), bits_typespec)
+    normal_fraction = round_significand(fraction, constant.(dropped), constant)
+    normal = Value.add(normal_exponent, normal_fraction, bits_typespec)
+
+    # Below the normal range of the format, the hidden bit becomes part of
+    # the fraction of a subnormal
+    significand = Value.bitwise_or(fraction, constant.(2 ** 52), bits_typespec)
+    subnormal_shift = Value.subtract(constant.(dropped + 1024 - bias), exponent, bits_typespec)
+    subnormal_shift = Value.min(subnormal_shift, constant.(63), bits_typespec)
+    subnormal = round_significand(significand, subnormal_shift, constant)
+
+    normal? = Value.greater_equal(exponent, constant.(1024 - bias), pred_typespec)
+    zero? = Value.equal(exponent, constant.(0), pred_typespec)
+    magnitude = Value.select(normal?, normal, subnormal, bits_typespec)
+    magnitude = Value.select(zero?, constant.(0), magnitude, bits_typespec)
+    magnitude = Value.min(magnitude, constant.(overflow), bits_typespec)
+
+    rounded =
+      sign
+      |> Value.bitwise_or(magnitude, bits_typespec)
+      |> Value.convert(Typespec.tensor({:u, size}, shape))
+      |> Value.bitcast_convert(target_typespec)
+
+    # Infinities and NaNs convert exactly
+    non_finite? = Value.equal(exponent, constant.(0x7FF), pred_typespec)
+    Value.select(non_finite?, Value.convert(op, target_typespec), rounded, target_typespec)
+  end
+
+  # Integers round to the precision of the format in an f32, which then
+  # converts exactly
+  defp round_integer_to_format(%Value{function: function} = op, target) do
+    {_exponent_bits, mantissa_bits, _overflow} = Map.fetch!(@narrow_float_formats, target)
+    %{type: {kind, size} = type, shape: shape} = typespec = Value.get_typespec(op)
+    bits_typespec = Typespec.tensor({:u, 64}, shape)
+    pred_typespec = Typespec.tensor({:pred, 8}, shape)
+    f32_typespec = Typespec.tensor({:f, 32}, shape)
+    power_typespec = Typespec.tensor({:u, 32}, shape)
+    constant = &Value.broadcast_in_dim(to_constant(function, &1, {:u, 64}), [], bits_typespec)
+
+    # The magnitude fits the unsigned type of the same size, even for the
+    # minimum of a signed type
+    unsigned_typespec = Typespec.tensor({:u, size}, shape)
+    unsigned = Value.bitcast_convert(op, unsigned_typespec)
+
+    {magnitude, negative?} =
+      if kind == :s do
+        zero = Value.broadcast_in_dim(to_constant(function, 0, type), [], typespec)
+        negative? = Value.less(op, zero, pred_typespec)
+        negated = op |> Value.negate(typespec) |> Value.bitcast_convert(unsigned_typespec)
+        {Value.select(negative?, negated, unsigned, unsigned_typespec), negative?}
+      else
+        {unsigned, nil}
+      end
+
+    magnitude = Value.convert(magnitude, bits_typespec)
+    leading_zeros = Value.count_leading_zeros(magnitude, bits_typespec)
+    length = Value.subtract(constant.(64), leading_zeros, bits_typespec)
+    long? = Value.greater(length, constant.(mantissa_bits + 1), pred_typespec)
+    extra = Value.subtract(length, constant.(mantissa_bits + 1), bits_typespec)
+    dropped = Value.select(long?, extra, constant.(0), bits_typespec)
+
+    # rounded * 2 ** dropped, both exact in f32
+    rounded = round_significand(magnitude, dropped, constant)
+    power = Value.add(dropped, constant.(127), bits_typespec)
+    power = Value.convert(power, power_typespec)
+    shift = Value.broadcast_in_dim(to_constant(function, 23, {:u, 32}), [], power_typespec)
+    power = Value.bitcast_convert(Value.left_shift(power, shift, power_typespec), f32_typespec)
+    value = Value.multiply(Value.convert(rounded, f32_typespec), power, f32_typespec)
+
+    value =
+      if negative?,
+        do: Value.select(negative?, Value.negate(value, f32_typespec), value, f32_typespec),
+        else: value
+
+    Value.convert(value, Typespec.tensor(target, shape))
+  end
+
+  # significand / 2 ** dropped, rounded to the nearest integer, ties to even
+  defp round_significand(significand, dropped, constant) do
+    %{shape: shape} = typespec = Value.get_typespec(significand)
+    pred_typespec = Typespec.tensor({:pred, 8}, shape)
+    quotient = Value.right_shift_logical(significand, dropped, typespec)
+
+    remainder =
+      Value.subtract(significand, Value.left_shift(quotient, dropped, typespec), typespec)
+
+    half =
+      Value.right_shift_logical(
+        Value.left_shift(constant.(1), dropped, typespec),
+        constant.(1),
+        typespec
+      )
+
+    odd? =
+      Value.equal(
+        Value.bitwise_and(quotient, constant.(1), typespec),
+        constant.(1),
+        pred_typespec
+      )
+
+    above_half? = Value.greater(remainder, half, pred_typespec)
+
+    tie? =
+      Value.bitwise_and(
+        Value.equal(remainder, half, pred_typespec),
+        Value.not_equal(remainder, constant.(0), pred_typespec),
+        pred_typespec
+      )
+
+    round_up? =
+      Value.bitwise_or(above_half?, Value.bitwise_and(tie?, odd?, pred_typespec), pred_typespec)
+
+    Value.add(quotient, Value.select(round_up?, constant.(1), constant.(0), typespec), typespec)
   end
 
   defp merge_type({:pred, 8}, {:pred, 8}), do: {:pred, 8}
