@@ -10,6 +10,10 @@
   * Drop the copy of the batched `Nx.dot/6` result
   * Broadcast `Nx.eye/2` and `Nx.iota/2` results as views
 
+### Bug fixes
+
+  * Raise in `Nx.LinAlg.triangular_solve/3` only when an entry of the diagonal is zero, instead of whenever every determinant in the batch is at most 1.0e-4, which also rejected well-conditioned matrices
+
 ## v1.0.0 (2026-09-10)
 
   * Update to latest Nx

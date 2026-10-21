@@ -1559,8 +1559,23 @@ defmodule Torchx.Backend do
       |> from_nx()
       |> Torchx.to_type(out_type)
 
-    # Check for singular matrix before reshaping for batching
-    check_singular_matrix(a_tx)
+    # libtorch returns infinities and NaNs instead of raising when an entry of
+    # the diagonal is zero
+    size = elem(a.shape, tuple_size(a.shape) - 1)
+    zero = Torchx.scalar_tensor(0, out_type, device)
+
+    singular? =
+      a_tx
+      |> Torchx.equal(zero)
+      |> Torchx.logical_and(Torchx.eye(size, :bool, device))
+      |> Torchx.any()
+      |> Torchx.to_nx()
+      |> Nx.to_number()
+      |> Kernel.==(1)
+
+    if singular? do
+      raise ArgumentError, "can't solve for singular matrix"
+    end
 
     a_tx_batched = Torchx.reshape(a_tx, batched_a_shape)
 

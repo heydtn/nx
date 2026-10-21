@@ -71,6 +71,28 @@ defmodule Torchx.NxLinAlgTest do
       assert_all_close(result, expected)
     end
 
+    test "solves well-conditioned systems whose determinant is small" do
+      # the determinant is 0.5 ** 16, but the matrix is perfectly conditioned
+      a = Nx.multiply(Nx.eye(16), 0.5)
+      b = Nx.iota({16, 2})
+      expected = Nx.multiply(b, 2.0)
+
+      assert_all_close(Nx.LinAlg.triangular_solve(a, b), expected)
+    end
+
+    test "raises for singular matrices, alone and in a batch" do
+      singular = Nx.tensor([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+      batch = Nx.stack([Nx.eye(3), singular])
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.triangular_solve(singular, Nx.tensor([1.0, 2.0, 1.0]))
+      end
+
+      assert_raise ArgumentError, "can't solve for singular matrix", fn ->
+        Nx.LinAlg.triangular_solve(batch, Nx.tensor([[1.0, 2.0, 1.0], [1.0, 2.0, 1.0]]))
+      end
+    end
+
     test "lower: false" do
       a = Nx.tensor([[1, 1, 1, 1], [0, 1, 0, 1], [0, 0, 1, 2], [0, 0, 0, 3]])
       b = Nx.tensor([2, 4, 2, 4])
