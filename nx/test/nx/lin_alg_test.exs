@@ -278,6 +278,52 @@ defmodule Nx.LinAlgTest do
       assert_equal(Nx.LinAlg.invert(in_f64), nan)
     end
 
+    test "returns NaN for larger singular matrices whose pivots are rounding noise" do
+      # products of 16x15 and 15x16 matrices of -1, 0 and 1 have rank 15 at
+      # most, but rounding leaves noise in place of their zero pivot
+      for {type, seed} <- [{{:f, 32}, 7}, {{:f, 64}, 5}] do
+        key = Nx.Random.key(seed)
+        {left, key} = Nx.Random.randint(key, -1, 2, shape: {16, 16, 15})
+        {right, _} = Nx.Random.randint(key, -1, 2, shape: {16, 15, 16})
+
+        t =
+          left
+          |> Nx.dot([2], [0], right, [1], [0])
+          |> Nx.as_type(type)
+
+        nan = Nx.broadcast(:nan, {16, 16, 16})
+        assert_equal(Nx.LinAlg.invert(t), nan)
+      end
+    end
+
+    test "inverts a bf16 matrix whose condition number is near the reciprocal of the unit roundoff" do
+      # the residual of the computed inverse proves the matrix nonsingular
+      {ints, _} = Nx.Random.randint(Nx.Random.key(3), -5, 6, shape: {16, 16, 16})
+      t = Nx.as_type(ints[1], :bf16)
+
+      expected =
+        t
+        |> Nx.as_type(:f64)
+        |> Nx.LinAlg.invert()
+
+      error =
+        t
+        |> Nx.LinAlg.invert()
+        |> Nx.as_type(:f64)
+        |> Nx.subtract(expected)
+        |> Nx.abs()
+        |> Nx.reduce_max()
+        |> Nx.to_number()
+
+      scale =
+        expected
+        |> Nx.abs()
+        |> Nx.reduce_max()
+        |> Nx.to_number()
+
+      assert error <= 0.05 * scale
+    end
+
     test "returns NaN for singular matrices in a batch" do
       a =
         Nx.tensor([
@@ -355,9 +401,7 @@ defmodule Nx.LinAlgTest do
       assert_equal(Nx.LinAlg.invert(t), expected)
     end
 
-    test "inverts bf16 diagonal and block-diagonal matrices at sizes where the tolerance is large" do
-      # the tolerance is 0.094 at n = 32 and at n = 64 in bf16; a pivot that
-      # nothing was subtracted from still counts as nonsingular
+    test "inverts large bf16 diagonal and block-diagonal matrices" do
       identity = Nx.eye(64, type: :bf16)
       assert_equal(Nx.LinAlg.invert(identity), identity)
 

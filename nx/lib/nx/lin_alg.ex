@@ -839,7 +839,9 @@ defmodule Nx.LinAlg do
         ]
       >
 
-  If a singular matrix is passed, the result will silently fail.
+  A matrix that is singular to working precision returns NaN. That is when
+  its reciprocal condition number is below the unit roundoff of its type and
+  the residual of the computed inverse doesn't prove it nonsingular.
 
       iex> Nx.LinAlg.invert(Nx.tensor([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [1, 1, 1, 1]]))
       #Nx.Tensor<
@@ -914,21 +916,91 @@ defmodule Nx.LinAlg do
 
     floating = Nx.as_type(tensor, floating_type)
 
-    # Scale each row by the power of two nearest its largest absolute value,
-    # so the singularity check below doesn't depend on the magnitude of the
-    # entries. Powers of two scale exactly, so an exactly singular matrix
-    # stays exactly singular; LAPACK's ?geequb scales by powers of the radix
-    # for the same reason (Demmel, Hida, Kahan, Li, Mukherjee and Riedy, ACM
-    # TOMS 32(2), 2006, doi:10.1145/1141885.1141894).
-    # Rounding rather than flooring the exponent keeps the scaled rows near 1
-    # when log2 is computed in a narrow type and lands just below an integer.
-    # The exponent is clipped to the normal range of the type, since some
-    # backends flush a subnormal scale to zero and a scale beyond the largest
-    # power of two overflows; 2 / smallest normal is that largest power.
-    row_max =
-      floating
+    # Scale each row, and then each column, by the power of two nearest its
+    # largest absolute value, so the singularity check below doesn't depend on
+    # the magnitude of the entries or on how the matrix is graded. Powers of
+    # two scale exactly, so an exactly singular matrix stays exactly singular;
+    # LAPACK's ?geequb scales by powers of the radix for the same reason
+    # (Demmel, Hida, Kahan, Li, Mukherjee and Riedy, ACM TOMS 32(2), 2006,
+    # doi:10.1145/1141885.1141894).
+    row_scaling = power_of_two_scaling(floating, 1, type)
+    row_scaled = row_scaling * floating
+    column_scaling = power_of_two_scaling(row_scaled, 0, type)
+    normalized_tensor = row_scaled * column_scaling
+
+    {p, l, u} = Nx.LinAlg.lu(normalized_tensor)
+
+    # An exactly zero or overflowed pivot makes the matrix singular before
+    # anything is solved. Solving a singular factor raises on some backends,
+    # so the identity takes its place.
+    pivots =
+      u
+      |> Nx.take_diagonal()
       |> Nx.abs()
-      |> Nx.reduce_max(axes: [1], keep_axes: true)
+
+    zero_pivot? = Nx.any(pivots == 0 or Nx.is_infinity(pivots))
+    identity = Nx.eye(n, type: floating_type)
+    lower = Nx.select(zero_pivot?, identity, l)
+    upper = Nx.select(zero_pivot?, identity, u)
+
+    y = Nx.LinAlg.triangular_solve(lower, Nx.transpose(p), lower: true)
+    normalized_inverse = Nx.LinAlg.triangular_solve(upper, y, lower: false)
+
+    # The inverse of R A C is C^-1 A^-1 R^-1, so A^-1 is C (R A C)^-1 R.
+    inverse = Nx.transpose(column_scaling) * normalized_inverse * Nx.transpose(row_scaling)
+
+    # The matrix is singular to working precision unless one of two
+    # certificates holds for the computed inverse X of the scaled matrix S:
+    #
+    #   * its reciprocal condition number 1 / (||S||_1 ||X||_1) is above the
+    #     unit roundoff of the type, the test of LAPACK's ?gesvx
+    #   * its residual ||X S - I||_inf is below 1, which proves S nonsingular
+    #     and bounds the relative error of X by the residual over one minus
+    #     it (Oishi and Rump, Numer. Math. 90(4), 2002,
+    #     doi:10.1007/s002110100310)
+    #
+    # The first accepts ill-conditioned matrices in the wider types, the
+    # second accepts inverses of 16 and 8-bit matrices that are accurate even
+    # though their condition number is near the reciprocal of the unit
+    # roundoff. Comparing with "not above" and "not below" also treats a NaN,
+    # which an inverse that overflowed a type without infinities produces,
+    # as failing.
+    unit_roundoff =
+      floating_type
+      |> Nx.Type.to_real()
+      |> Nx.Constants.epsilon()
+      |> Nx.divide(2)
+
+    reciprocal_condition = 1 / (one_norm(normalized_tensor) * one_norm(normalized_inverse))
+
+    residual =
+      normalized_inverse
+      |> Nx.dot(normalized_tensor)
+      |> Nx.subtract(identity)
+      |> Nx.abs()
+      |> Nx.sum(axes: [1])
+      |> Nx.reduce_max()
+
+    well_conditioned? = reciprocal_condition > unit_roundoff
+    certified? = residual < 1
+    singular? = zero_pivot? or not (well_conditioned? or certified?)
+    result = if singular?, do: Nx.Constants.nan(type), else: inverse
+
+    Nx.revectorize(result, vectorized_axes, target_shape: input_shape)
+  end
+
+  # The power of two nearest the largest absolute value along each slice of
+  # the axis, inverted. Rounding rather than flooring the exponent keeps the
+  # scaled values near 1 when log2 is computed in a narrow type and lands just
+  # below an integer. The exponent is clipped to the normal range of the type,
+  # since some backends flush a subnormal scale to zero and a scale beyond the
+  # largest power of two overflows; 2 / smallest normal is that largest power.
+  # Slices of zeros keep a scale of 1.
+  defnp power_of_two_scaling(tensor, axis, type) do
+    slice_max =
+      tensor
+      |> Nx.abs()
+      |> Nx.reduce_max(axes: [axis], keep_axes: true)
 
     smallest_normal = Nx.Constants.smallest_positive_normal(type)
 
@@ -943,122 +1015,20 @@ defmodule Nx.LinAlg do
       |> Nx.round()
 
     exponent =
-      row_max
+      slice_max
       |> Nx.log2()
       |> Nx.round()
       |> Nx.clip(-max_exponent, -min_exponent)
 
-    # don't rescale for 0-norm rows
-    scaling_matrix = Nx.select(row_max == 0, 1, 2 ** -exponent)
-    normalized_tensor = scaling_matrix * floating
-
-    {p, l, u} = Nx.LinAlg.lu(normalized_tensor)
-
-    # A matrix is singular to working precision when a pivot is no larger
-    # than the rounding error of its own computation, taken as the rounding
-    # error allowed for n operations in the type times the sum of the
-    # magnitudes of the products subtracted to form it. That follows the
-    # backward error bound |A - LU| <= n u |L||U| of the factorization (Rump
-    # and Jeannerod, SIAM J. Matrix Anal. Appl. 35(2), 2014,
-    # doi:10.1137/130927231), applied to each pivot. That covers an
-    # exactly zero pivot and the rounding noise an exactly singular matrix
-    # can leave in its place, while a pivot that is small because the matrix
-    # is graded still counts. The pivot itself is left out of the sum, so a
-    # pivot nothing was subtracted from never counts as singular, however
-    # large the tolerance. A pivot that overflowed the type counts as
-    # singular too.
-    pivots =
-      u
-      |> Nx.take_diagonal()
-      |> Nx.abs()
-
-    lower_magnitudes =
-      l
-      |> Nx.tril(k: -1)
-      |> Nx.abs()
-
-    upper_column_magnitudes =
-      u
-      |> Nx.transpose()
-      |> Nx.abs()
-
-    # Row i sums |l[i][j]| * |u[j][i]| over j < i, the magnitudes of the
-    # products subtracted from a[i][i] to form pivot i.
-    magnitude_product_sums = Nx.sum(lower_magnitudes * upper_column_magnitudes, axes: [1])
-
-    tolerance = rounding_error(floating_type, n)
-    overflowed? = Nx.is_infinity(pivots)
-    singular? = Nx.any(pivots <= tolerance * magnitude_product_sums or overflowed?)
-
-    inverse =
-      if singular? do
-        Nx.Constants.nan(type)
-      else
-        # We can think of the implementation as a system of equations.
-        # Since we're scaling the left side by scaling_matrix[i] for each row i,
-        # we need to also scale the right side.
-        # This is achieved by scaling each row of an identity matrix, which is,
-        # in fact, the same as putting the scaling values in the diagonal of the
-        # right-side matrix.
-        right_side =
-          scaling_matrix
-          |> Nx.squeeze(axes: [1])
-          |> Nx.make_diagonal()
-
-        permuted = Nx.dot(p, [0], right_side, [0])
-
-        # With vectorized input both branches run on every matrix, and
-        # solving a singular factor raises on some backends, so the identity
-        # takes its place.
-        identity = Nx.eye(n)
-        lower = Nx.select(singular?, identity, l)
-        upper = Nx.select(singular?, identity, u)
-        y = Nx.LinAlg.triangular_solve(lower, permuted, lower: true)
-        Nx.LinAlg.triangular_solve(upper, y, lower: false)
-      end
-
-    Nx.revectorize(inverse, vectorized_axes, target_shape: input_shape)
+    Nx.select(slice_max == 0, 1, 2 ** -exponent)
   end
 
-  deftransformp rounding_error(type, n) do
-    epsilon =
-      type
-      |> Nx.Type.to_real()
-      |> Nx.Constants.epsilon()
-
-    type
-    |> rounding_error_multiplier(n)
-    |> Nx.multiply(epsilon)
+  defnp one_norm(matrix) do
+    matrix
+    |> Nx.abs()
+    |> Nx.sum(axes: [0])
+    |> Nx.reduce_max()
   end
-
-  # The rounding error to allow for after n operations in the type, as a
-  # multiple of its epsilon. The constants come from these bounds and from
-  # measurement, balancing singular matrices missed against nonsingular
-  # ones flagged:
-  #
-  #   * f32, f64: Rump and Jeannerod, SIAM J. Matrix Anal. Appl. 35(2), 2014,
-  #     doi:10.1137/130927231
-  #   * c64, c128: the same, with Brent, Percival and Zimmermann, Math.
-  #     Comp. 76(259), 2007, doi:10.1090/S0025-5718-07-01931-X
-  #   * f16: Higham and Mary, SIAM J. Sci. Comput. 41(5), 2019,
-  #     doi:10.1137/18M1226312
-  #   * bf16: the same, capped by measurement
-  #   * 8-bit types: measurement
-  #
-  # Integer types reach this as f32.
-  defp rounding_error_multiplier({kind, _} = type, _n) when kind in [:s, :u],
-    do: raise(ArgumentError, "invert/1 expects a floating-point type, got: #{inspect(type)}")
-
-  defp rounding_error_multiplier({:bf, 16}, n), do: Enum.min([2 * n, 4 * :math.sqrt(n), 12])
-  defp rounding_error_multiplier({:f, 16}, n), do: min(2 * n, 4 * :math.sqrt(n))
-  defp rounding_error_multiplier({_, 8}, _n), do: 0.5
-  defp rounding_error_multiplier({:f, size}, n) when size in [32, 64], do: 2 * n
-
-  defp rounding_error_multiplier({:c, size}, n) when size in [64, 128],
-    do: 2 * (n - 1 + :math.sqrt(5))
-
-  defp rounding_error_multiplier(type, _n),
-    do: raise(ArgumentError, "invert/1 does not support type #{inspect(type)}")
 
   deftransformp invert_shape(tensor) do
     shape = Nx.shape(tensor)
