@@ -1471,12 +1471,28 @@ eigh(ErlNifEnv *env, fine::ResourcePtr<TorchTensor> tensor) {
 
 REGISTER_TENSOR_NIF(eigh);
 
-fine::Ok<fine::ResourcePtr<TorchTensor>>
+// Returns the solution and, for each matrix, LAPACK's info, which is
+// nonzero when the matrix is singular, instead of raising
+fine::Ok<
+    std::tuple<fine::ResourcePtr<TorchTensor>, fine::ResourcePtr<TorchTensor>>>
 solve(ErlNifEnv *env, fine::ResourcePtr<TorchTensor> tensorA,
       fine::ResourcePtr<TorchTensor> tensorB) {
-  TORCH_CATCH_ERROR(
-      tensor_ok(torch::linalg_solve(get_tensor(tensorA), get_tensor(tensorB))),
-      "Linear solve");
+  try {
+    std::tuple<torch::Tensor, torch::Tensor> result =
+        torch::linalg_solve_ex(get_tensor(tensorA), get_tensor(tensorB));
+    return fine::Ok(
+        std::make_tuple(fine::make_resource<TorchTensor>(std::get<0>(result)),
+                        fine::make_resource<TorchTensor>(std::get<1>(result))));
+  } catch (const c10::Error &e) {
+    throw std::runtime_error(std::string("Linear solve") +
+                             " failed: " + e.what());
+  } catch (const std::exception &e) {
+    throw std::runtime_error(std::string("Linear solve") +
+                             " failed: " + e.what());
+  } catch (...) {
+    throw std::runtime_error(std::string("Linear solve") +
+                             " failed with unknown error");
+  }
 }
 
 REGISTER_TENSOR_NIF(solve);

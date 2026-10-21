@@ -13,6 +13,7 @@
 ### Bug fixes
 
   * Raise in `Nx.LinAlg.triangular_solve/3` only when an entry of the diagonal is zero, instead of whenever every determinant in the batch is at most 1.0e-4, which also rejected well-conditioned matrices
+  * Raise in `Nx.LinAlg.solve/2` for a singular matrix anywhere in a batch, and only for singular ones, instead of whenever every determinant in the batch is at most 1.0e-4, which also rejected well-conditioned matrices and let libtorch's error through for a batch with a singular matrix
 
 ## v1.0.0 (2026-09-10)
 

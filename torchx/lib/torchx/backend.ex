@@ -1603,59 +1603,21 @@ defmodule Torchx.Backend do
     a_tx = a |> from_nx |> Torchx.to_type(to_torch_type(output_type, device))
     b_tx = b |> from_nx |> Torchx.to_type(to_torch_type(output_type, device))
 
-    check_singular_matrix(a_tx)
+    {result_tx, info_tx} = Torchx.solve(a_tx, b_tx)
 
-    a_tx
-    |> Torchx.solve(b_tx)
-    |> to_nx(out)
-  end
-
-  defp check_singular_matrix(tensor) do
-    {device, _} = tensor
-
-    torch_type =
-      tensor
-      |> Torchx.scalar_type()
-      |> from_torch_type()
-      |> Nx.Type.to_real()
-      |> to_torch_type(device)
-
-    # Use appropriate epsilon for the precision level
-    # f32 has ~7 decimal digits of precision, f64 has ~15
-    # Use a more lenient epsilon to account for rounding in conversions
-    epsilon_value =
-      case torch_type do
-        # f32
-        :float -> 1.0e-4
-        # f64
-        :double -> 1.0e-10
-        # default to f32 precision for other types
-        _ -> 1.0e-4
-      end
-
-    eps = Torchx.scalar_tensor(epsilon_value, torch_type, device)
-
-    # We need to manually validate if the A tensor is singular
-    # (i.e. the tensor has its determinant equal to 0)
-    # Otherwise, an exception will be thrown by libtorch.
-    #
-    # a non-zero eps value is chosen so we can account for possible rounding errors
-    # in the determinant calculation
-
-    det = Torchx.determinant(tensor)
-    abs_det = Torchx.abs(det)
-
-    is_singular =
-      abs_det
-      |> Torchx.less_equal(eps)
-      |> Torchx.all()
+    # info is nonzero for each matrix in the batch that is singular
+    singular? =
+      info_tx
+      |> Torchx.any()
       |> Torchx.to_nx()
       |> Nx.to_number()
       |> Kernel.==(1)
 
-    if is_singular do
+    if singular? do
       raise ArgumentError, "can't solve for singular matrix"
     end
+
+    to_nx(result_tx, out)
   end
 
   @impl true
